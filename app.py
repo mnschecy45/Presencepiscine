@@ -173,16 +173,20 @@ def show_reception():
 # =======================
 def show_main_hub():
     st.markdown("<h1 style='text-align: center; color: #1E3A8A;'>🏊‍♂️ Application Piscine Pro</h1>", unsafe_allow_html=True)
+    st.write("##")
     c1, c2, c3 = st.columns(3)
-    if c1.button("👨‍🏫 MAÎTRE-NAGEUR\n(Appel bassin)", use_container_width=True, height=200):
-        st.session_state.current_page = "MN"
-        st.rerun()
-    if c2.button("💁 RÉCEPTION\n(Recherche)", use_container_width=True, height=200):
-        st.session_state.current_page = "REC"
-        st.rerun()
-    if c3.button("📊 MANAGER\n(Statistiques)", use_container_width=True, height=200):
-        st.session_state.current_page = "MGR"
-        st.rerun()
+    with c1:
+        if st.button("👨‍🏫 MAÎTRE-NAGEUR", use_container_width=True):
+            st.session_state.current_page = "MN"
+            st.rerun()
+    with c2:
+        if st.button("💁 RÉCEPTION", use_container_width=True):
+            st.session_state.current_page = "REC"
+            st.rerun()
+    with c3:
+        if st.button("📊 MANAGER", use_container_width=True):
+            st.session_state.current_page = "MGR"
+            st.rerun()
 
 # =======================
 # 8. ROUTAGE
