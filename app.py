@@ -76,7 +76,7 @@ def parse_pdf_complete(file_bytes):
     return pd.DataFrame(rows)
 
 # =======================
-# 4. ESPACE MAÎTRE-NAGEUR
+# 4. ESPACE MAÎTRE-NAGEUR (VERSION CORRIGÉE COULEURS)
 # =======================
 def show_maitre_nageur():
     st.title("👨‍🏫 Espace Appel Bassin")
@@ -98,9 +98,13 @@ def show_maitre_nageur():
         for idx, row in df_appel.iterrows():
             key = f"pres_{idx}"
             if key not in st.session_state: st.session_state[key] = False
+            
+            # --- CORRECTION COULEURS ICI ---
             bg_color = "#dcfce7" if st.session_state[key] else "#fee2e2"
+            # On force la couleur du texte en noir (color: black;) pour la lisibilité
             col_nom, col_check = st.columns([4, 1])
-            col_nom.markdown(f"<div style='padding:12px; background:{bg_color}; border-radius:8px; margin-bottom:5px;'><strong>{row['Nom'].upper()} {row['Prenom']}</strong></div>", unsafe_allow_html=True)
+            col_nom.markdown(f"<div style='padding:12px; background:{bg_color}; color: black; border-radius:8px; margin-bottom:5px;'><strong>{row['Nom'].upper()} {row['Prenom']}</strong></div>", unsafe_allow_html=True)
+            
             st.session_state[key] = col_check.checkbox("Présent", key=f"cb_{idx}", value=st.session_state[key], label_visibility="collapsed")
             df_appel.at[idx, "Absent"] = not st.session_state[key]
 
@@ -116,6 +120,7 @@ def show_maitre_nageur():
             save_data_to_cloud(df_appel)
             st.session_state.appel_termine = True
             st.rerun()
+
 
 # =======================
 # 5. ESPACE MANAGER
