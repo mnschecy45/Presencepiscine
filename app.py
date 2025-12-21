@@ -265,11 +265,10 @@ def show_reception():
 # 4. ESPACE MANAGER (VERSION PRO CONFIG P1/P2/P3)
 # =======================
 def show_manager():
-    # CSS pour le style "Pro"
+    # CSS Pro
     st.markdown("""
         <style>
         .stMetric { background-color: #0E1117; border: 1px solid #303030; padding: 15px; border-radius: 5px; }
-        .stAlert { background-color: #1E1E1E; color: white; border: 1px solid #444; }
         </style>
     """, unsafe_allow_html=True)
 
@@ -286,171 +285,159 @@ def show_manager():
         st.warning("Base de données vide.")
         return
 
-    # Préparation des dates
+    # Préparation
     df_work = df_all.copy()
     if "Date_dt" not in df_work.columns and "Date" in df_work.columns:
          df_work["Date_dt"] = pd.to_datetime(df_work["Date"], errors='coerce')
     
     # --- ONGLETS ---
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Dashboard", "🗓️ Planning Semaine", "📉 Risque Départ", "⚡ Actions", "⚙️ Config"])
+    # J'ai renommé l'onglet 3 pour être plus clair
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Dashboard", "🗓️ Planning", "🚨 Suivi Absences", "⚡ Actions", "⚙️ Config"])
 
     # ==========================
     # TAB 1 : DASHBOARD
     # ==========================
     with tab1:
         st.subheader("Vue d'ensemble")
-        today = pd.Timestamp.now().normalize()
         
-        nb_total = len(df_work)
-        nb_absents = len(df_work[df_work["Statut"] == "Absent"])
-        taux = ((nb_total - nb_absents) / nb_total * 100) if nb_total > 0 else 0
+        nb_total_lignes = len(df_work)
+        nb_absences_total = len(df_work[df_work["Statut"] == "Absent"])
+        
+        # Calcul du taux de présence global
+        taux = ((nb_total_lignes - nb_absences_total) / nb_total_lignes * 100) if nb_total_lignes > 0 else 0
         
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Inscrits", nb_total)
-        c2.metric("Absents", nb_absents)
-        c3.metric("Présence", f"{taux:.1f}%")
-        c4.metric("Dernier ajout", df_work["Date"].max() if not df_work.empty else "-")
+        c1.metric("Enregistrements", nb_total_lignes)
+        c2.metric("Absences cumulées", nb_absences_total)
+        c3.metric("Taux Présence", f"{taux:.1f}%")
+        # Nombre de clients différents ayant au moins 1 absence
+        nb_clients_pb = df_work[df_work["Statut"] == "Absent"]["Nom"].nunique()
+        c4.metric("Clients avec absences", nb_clients_pb)
 
         st.write("---")
-        daily = df_work[df_work["Statut"] == "Présent"].groupby("Date_dt").size()
-        st.area_chart(daily, height=250)
-
-        c_g, c_d = st.columns(2)
-        with c_g:
-            st.markdown("### Par Cours")
-            if "Cours" in df_work.columns:
-                st.dataframe(df_work["Cours"].value_counts(), use_container_width=True)
-        with c_d:
-            st.markdown("### Par Créneau")
-            if "Heure" in df_work.columns:
-                st.dataframe(df_work["Heure"].value_counts(), use_container_width=True)
+        st.caption("Évolution des absences")
+        daily_abs = df_work[df_work["Statut"] == "Absent"].groupby("Date_dt").size()
+        st.bar_chart(daily_abs, height=200, color="#ff4b4b")
 
     # ==========================
-    # TAB 5 : CONFIG (Réglages Seuils & Message)
+    # TAB 5 : CONFIG (Seuils en NOMBRE D'ABSENCES)
     # ==========================
     with tab5:
-        st.header("⚙️ Config")
+        st.header("⚙️ Config Alertes")
         c_seuils, c_msg = st.columns([1, 1])
         
         with c_seuils:
-            st.subheader("Seuils d'alerte")
+            st.subheader("Paliers d'absences")
+            st.info("Définissez au bout de combien d'absences on change de niveau.")
+            
             # P1
             c1a, c1b = st.columns([1, 2])
-            p1_val = c1a.number_input("Seuil P1 (Jours)", value=st.session_state.get("p1_val", 7), min_value=1)
-            p1_label = c1b.text_input("Label P1", value=st.session_state.get("p1_label", "Envoyer un mail"))
+            p1_val = c1a.number_input("P1 : Nb Absences", value=st.session_state.get("p1_val", 1), min_value=1)
+            p1_label = c1b.text_input("Label P1", value=st.session_state.get("p1_label", "Mail de rappel"))
+            
             # P2
             c2a, c2b = st.columns([1, 2])
-            p2_val = c2a.number_input("Seuil P2 (Jours)", value=st.session_state.get("p2_val", 14), min_value=1)
-            p2_label = c2b.text_input("Label P2", value=st.session_state.get("p2_label", "Appeler le client"))
+            p2_val = c2a.number_input("P2 : Nb Absences", value=st.session_state.get("p2_val", 3), min_value=1)
+            p2_label = c2b.text_input("Label P2", value=st.session_state.get("p2_label", "Appel téléphonique"))
+            
             # P3
             c3a, c3b = st.columns([1, 2])
-            p3_val = c3a.number_input("Seuil P3 (Jours)", value=st.session_state.get("p3_val", 21), min_value=1)
-            p3_label = c3b.text_input("Label P3", value=st.session_state.get("p3_label", "Convocation / RDV"))
+            p3_val = c3a.number_input("P3 : Nb Absences", value=st.session_state.get("p3_val", 5), min_value=1)
+            p3_label = c3b.text_input("Label P3", value=st.session_state.get("p3_label", "Convocation"))
             
             if st.button("💾 Sauvegarder Seuils"):
                 st.session_state["p1_val"] = p1_val; st.session_state["p1_label"] = p1_label
                 st.session_state["p2_val"] = p2_val; st.session_state["p2_label"] = p2_label
                 st.session_state["p3_val"] = p3_val; st.session_state["p3_label"] = p3_label
-                st.success("Seuils enregistrés !")
+                st.success("Configuration enregistrée !")
 
         with c_msg:
-            st.subheader("Template du Message")
-            st.caption("Utilisez {prenom} pour le nom et {details} pour la liste des absences.")
-            default_msg = "Bonjour {prenom},\n\nSauf erreur de notre part, nous avons relevé les absences suivantes :\n{details}\n\nAfin de ne pas perdre le bénéfice de votre progression, merci de nous confirmer votre présence pour la prochaine séance.\n\nCordialement,\nL'équipe Piscine."
+            st.subheader("Message Type")
+            default_msg = "Bonjour {prenom},\n\nSauf erreur de notre part, nous avons relevé les absences suivantes :\n{details}\n\nMerci de nous confirmer votre présence pour la prochaine séance.\n\nCordialement,\nL'équipe Piscine."
             tpl = st.text_area("Contenu", value=st.session_state.get("msg_tpl", default_msg), height=300)
             
             if st.button("💾 Sauvegarder Message"):
                 st.session_state["msg_tpl"] = tpl
-                st.success("Template enregistré !")
+                st.success("Message enregistré !")
 
     # ==========================
-    # TAB 3 : RISQUE DÉPART (Calcul automatique)
+    # TAB 3 : SUIVI ABSENCES (Logique corrigée : COMPTAGE)
     # ==========================
     with tab3:
-        st.subheader("📉 Risque Départ")
-        today = pd.Timestamp.now().normalize()
+        st.subheader("🚨 Suivi par nombre d'absences")
         
-        # On ne regarde que ceux qui sont déjà venus au moins une fois
-        df_p = df_work[df_work["Statut"] == "Présent"]
+        # 1. On isole uniquement les lignes "Absent"
+        df_absents_only = df_work[df_work["Statut"] == "Absent"]
         
-        if not df_p.empty:
-            last_venue = df_p.groupby("Nom")["Date_dt"].max().reset_index()
-            last_venue["Jours_Absent"] = (today - last_venue["Date_dt"]).dt.days
+        if not df_absents_only.empty:
+            # 2. On compte combien de fois chaque nom apparait en "Absent"
+            bilan_absences = df_absents_only["Nom"].value_counts().reset_index()
+            bilan_absences.columns = ["Nom", "Total_Absences"]
             
-            s1 = st.session_state.get("p1_val", 7)
-            s2 = st.session_state.get("p2_val", 14)
-            s3 = st.session_state.get("p3_val", 21)
+            # 3. On récupère les seuils
+            s1 = st.session_state.get("p1_val", 1)
+            s2 = st.session_state.get("p2_val", 3)
+            s3 = st.session_state.get("p3_val", 5)
             
-            def get_niveau(jours):
-                if jours >= s3: return f"🔴 P3 ({st.session_state.get('p3_label', 'Convocation')})"
-                elif jours >= s2: return f"🟠 P2 ({st.session_state.get('p2_label', 'Appel')})"
-                elif jours >= s1: return f"🟡 P1 ({st.session_state.get('p1_label', 'Mail')})"
-                else: return "OK"
+            # 4. On attribue le niveau P1/P2/P3 selon le NOMBRE
+            def get_niveau(nb):
+                if nb >= s3: return f"🔴 P3 ({st.session_state.get('p3_label', 'Convocation')})"
+                elif nb >= s2: return f"🟠 P2 ({st.session_state.get('p2_label', 'Appel')})"
+                elif nb >= s1: return f"🟡 P1 ({st.session_state.get('p1_label', 'Mail')})"
+                else: return "OK" # (Ne devrait pas arriver si on filtre > 0)
 
-            last_venue["Niveau"] = last_venue["Jours_Absent"].apply(get_niveau)
-            alertes = last_venue[last_venue["Niveau"] != "OK"].sort_values("Jours_Absent", ascending=False)
+            bilan_absences["Niveau"] = bilan_absences["Total_Absences"].apply(get_niveau)
             
-            st.dataframe(alertes, use_container_width=True)
+            # 5. Affichage trié par nombre d'absences (les pires en haut)
+            st.dataframe(bilan_absences, use_container_width=True)
+            
         else:
-            st.info("Pas assez de données de présence.")
+            st.success("Aucune absence enregistrée dans la base !")
 
     # ==========================
-    # TAB 4 : ACTIONS (C'est ici que la magie opère !)
+    # TAB 4 : ACTIONS (Génération message)
     # ==========================
     with tab4:
-        st.subheader("⚡ Actions Re-quises")
+        st.subheader("⚡ Traitement des Absences")
         
-        if 'alertes' in locals() and not alertes.empty:
-            # Liste déroulante des gens à relancer
-            liste_clients = alertes["Nom"].unique()
-            client_select = st.selectbox("Sélectionner un client à traiter", liste_clients)
+        # On vérifie qu'on a bien des gens à traiter (variable créée dans l'onglet 3)
+        if 'bilan_absences' in locals() and not bilan_absences.empty:
+            
+            liste_clients = bilan_absences["Nom"].tolist()
+            client_select = st.selectbox("Qui voulez-vous relancer ?", liste_clients)
             
             if client_select:
-                # 1. On récupère les infos générales
-                info_client = alertes[alertes["Nom"] == client_select].iloc[0]
-                niveau = info_client['Niveau']
-                jours = info_client['Jours_Absent']
+                # Infos du client
+                info = bilan_absences[bilan_absences["Nom"] == client_select].iloc[0]
+                nb = info["Total_Absences"]
+                niv = info["Niveau"]
                 
-                st.markdown(f"**Statut :** {niveau} | **Absent depuis :** {jours} jours")
+                st.info(f"**Client :** {client_select} | **Niveau :** {niv} | **Total Absences :** {nb}")
                 
-                # 2. ON GÉNÈRE LA LISTE DÉTAILLÉE DES ABSENCES (Le point clé !)
-                # On filtre tout l'historique de CE client
-                historique_client = df_work[df_work["Nom"] == client_select]
-                # On ne garde que ses absences
-                absences_client = historique_client[historique_client["Statut"] == "Absent"].sort_values("Date_dt", ascending=False)
+                # --- GÉNÉRATION DÉTAILS ---
+                # On va chercher les dates précises de ses absences
+                ses_absences = df_work[(df_work["Nom"] == client_select) & (df_work["Statut"] == "Absent")]
+                ses_absences = ses_absences.sort_values("Date_dt", ascending=False)
                 
-                details_txt = ""
-                if not absences_client.empty:
-                    lignes = []
-                    for idx, row in absences_client.iterrows():
-                        # On formate la date (ex: 17/12)
-                        date_str = row["Date_dt"].strftime("%d/%m") if pd.notnull(row["Date_dt"]) else "Date inconnue"
-                        # On récupère l'heure et le cours (s'ils existent, sinon "?")
-                        heure_str = row["Heure"] if "Heure" in row else "?"
-                        cours_str = row["Cours"] if "Cours" in row else "?"
-                        
-                        # On construit la ligne : "- Le 17/12 à 12h15 (Aquabiking)"
-                        lignes.append(f"- Le {date_str} à {heure_str} ({cours_str})")
-                    
-                    # On joint tout avec des sauts de ligne
-                    details_txt = "\n".join(lignes)
-                else:
-                    details_txt = "(Aucune absence spécifique notée, client juste inactif)"
-
-                # 3. Injection dans le template
+                lignes_details = []
+                for _, row in ses_absences.iterrows():
+                    d = row["Date_dt"].strftime("%d/%m/%Y") if pd.notnull(row["Date_dt"]) else "Date inconue"
+                    h = row.get("Heure", "?")
+                    c = row.get("Cours", "?")
+                    lignes_details.append(f"- {c} le {d} à {h}")
+                
+                txt_details = "\n".join(lignes_details)
+                
+                # --- INJECTION DANS LE MESSAGE ---
                 tpl = st.session_state.get("msg_tpl", "")
-                # On remplace {details} par la liste qu'on vient de créer
-                msg_final = tpl.replace("{prenom}", client_select).replace("{details}", details_txt)
+                msg_final = tpl.replace("{prenom}", client_select).replace("{details}", txt_details)
                 
-                # 4. Affichage
-                st.text_area("Message généré (prêt à copier) :", value=msg_final, height=300)
+                st.text_area("Message prêt à copier :", value=msg_final, height=250)
                 
-                # Bouton mailto (Bonus)
-                if st.button("✅ Marquer comme FAIT (Simulation)"):
-                    st.toast(f"Action enregistrée pour {client_select} !", icon="🎉")
-
+                if st.button("Marquer comme TRAITÉ"):
+                    st.toast(f"Relance notée pour {client_select}", icon="✅")
         else:
-            st.success("Aucune action requise pour le moment. Tout le monde est assidu ! 👏")
+            st.info("Tout le monde est présent, rien à faire !")
 
 # =======================
 # 5. HUB D'ACCUEIL
