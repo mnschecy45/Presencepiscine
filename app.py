@@ -262,27 +262,62 @@ def show_reception():
         st.info("La base de données est vide ou inaccessible.")
 
 def show_manager():
-    st.title("📊 Manager")
-    if st.text_input("Code confidentiel", type="password") == MANAGER_PASSWORD:
-        if df_all.empty: 
-            st.warning("Aucune donnée disponible.")
+    st.title("📊 Espace Manager")
+    
+    # 1. Vérification du mot de passe
+    password = st.text_input("🔒 Code confidentiel", type="password")
+    
+    if password == MANAGER_PASSWORD:
+        st.success("Accès autorisé")
+        st.write("---")
+
+        if df_all.empty:
+            st.warning("⚠️ La base de données est vide pour l'instant. Faites des appels pour voir des statistiques.")
             return
+
+        # 2. Réglage des paliers (Ce qui avait disparu)
+        st.subheader("⚙️ Réglages des alertes")
+        seuil_jours = st.slider("Alerter après combien de jours d'absence ?", min_value=7, max_value=90, value=21)
         
-        # Adaptation pour Airtable : on cherche "Statut" au lieu de "Absent"
-        # On suppose que 'Statut' contient 'Présent' ou 'Absent'
+        # 3. Calcul des absences
+        # On vérifie qu'on a bien les colonnes nécessaires
         if "Statut" in df_all.columns and "Date_dt" in df_all.columns:
             today = pd.Timestamp.now().normalize()
             
-            # On prend ceux qui sont venus (Statut = Présent)
-            df_p = df_all[df_all["Statut"] == "Présent"]
+            # On ne garde que les lignes où les gens étaient "Présent" pour voir leur DERNIERE venue
+            df_p = df_all[df_all["Statut"] == "Présent"].copy()
             
             if not df_p.empty:
-                last_v = df_p.groupby("Nom")["Date_dt"].max().reset_index()
-                last_v["Absence"] = (today - last_v["Date_dt"]).dt.days
-                st.write("🏃‍♂️ Alertes (Pas venu depuis > 21 jours) :")
-                st.dataframe(last_v[last_v["Absence"] > 21].sort_values("Absence", ascending=False), use_container_width=True)
+                # On cherche la date max (la plus récente) pour chaque nom
+                last_venue = df_p.groupby("Nom")["Date_dt"].max().reset_index()
+                
+                # On calcule le nombre de jours depuis cette date
+                last_venue["Jours_sans_venir"] = (today - last_venue["Date_dt"]).dt.days
+                
+                # On filtre ceux qui dépassent le seuil choisi avec le curseur
+                alertes = last_venue[last_venue["Jours_sans_venir"] >= seuil_jours].sort_values("Jours_sans_venir", ascending=False)
+                
+                # 4. Affichage des résultats
+                st.subheader(f"🚨 Élèves absents depuis + de {seuil_jours} jours")
+                
+                if not alertes.empty:
+                    # On affiche un beau tableau
+                    st.dataframe(
+                        alertes[["Nom", "Date_dt", "Jours_sans_venir"]].rename(columns={"Date_dt": "Dernière venue", "Jours_sans_venir": "Jours d'absence"}),
+                        use_container_width=True
+                    )
+                    
+                    # Petit graphique bonus
+                    st.bar_chart(alertes.set_index("Nom")["Jours_sans_venir"])
+                else:
+                    st.success(f"✅ Aucun élève n'a dépassé {seuil_jours} jours d'absence.")
+            else:
+                st.info("Pas assez de données 'Présent' pour calculer les absences.")
         else:
-            st.warning("Colonnes 'Statut' ou 'Date' manquantes dans Airtable.")
+            st.error("Les données Airtable ne contiennent pas encore de dates valides.")
+            
+    elif password:
+        st.error("Mot de passe incorrect.")
 
 # =======================
 # 5. HUB D'ACCUEIL
