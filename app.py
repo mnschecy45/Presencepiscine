@@ -54,19 +54,21 @@ def save_data_to_cloud(df_new):
     for i, row in df_new.iterrows():
         try:
             # On prépare la ligne pour Airtable
-            # On convertit le booléen 'Absent' en texte "Absent" ou "Présent"
             statut_final = "Absent" if row["Absent"] else "Présent"
             
-            # Conversion de la date en chaine de caractères pour Airtable
-            date_str = row["Date"].strftime("%Y-%m-%d") if isinstance(row["Date"], (date, datetime)) else str(row["Date"])
+            # Conversion de la date pour Airtable
+            if isinstance(row["Date"], (date, datetime)):
+                date_str = row["Date"].strftime("%Y-%m-%d")
+            else:
+                date_str = str(row["Date"])
 
+            # --- C'EST ICI QUE CA SE JOUE ---
             record = {
                 "Nom": row["Nom"],
                 "Statut": statut_final, 
                 "Date": date_str,
-                # On peut ajouter d'autres champs si ils existent dans Airtable
-                # "Cours": row["Cours"], 
-                # "Heure": row["Heure"]
+                "Cours": row["Cours"],  # <--- J'ai enlevé le # devant
+                "Heure": row["Heure"]   # <--- J'ai enlevé le # devant
             }
             
             # Envoi vers Airtable
