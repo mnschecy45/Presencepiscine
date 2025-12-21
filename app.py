@@ -246,214 +246,196 @@ def show_maitre_nageur():
 # 4. RÉCEPTION & MANAGER
 # =======================
 def show_reception():
-    st.title("💁 Réception")
-    s = st.text_input("🔎 Rechercher par Nom")
-    if s and not df_all.empty:
-        # On vérifie que les colonnes existent dans Airtable
-        cols_to_search = []
-        if "Nom" in df_all.columns: cols_to_search.append("Nom")
-        if "Prenom" in df_all.columns: cols_to_search.append("Prenom")
-        
-        if cols_to_search:
-            mask = pd.DataFrame(False, index=df_all.index, columns=['match'])
-            for col in cols_to_search:
-                mask['match'] |= df_all[col].astype(str).str.contains(s, case=False, na=False)
-            
-            res = df_all[mask['match']]
-            
-            cols_show = ["Date", "Statut"] # On adapte aux colonnes Airtable
-            if "Cours" in df_all.columns: cols_show.append("Cours")
-            
-            st.dataframe(res[cols_show].sort_values("Date", ascending=False), use_container_width=True)
-    elif df_all.empty:
-        st.info("La base de données est vide ou inaccessible.")
-
-# =======================
-# 4. ESPACE MANAGER (VERSION PRO CONFIG P1/P2/P3)
-# =======================
-def show_manager():
-    # CSS Pro
-    st.markdown("""
-        <style>
-        .stMetric { background-color: #0E1117; border: 1px solid #303030; padding: 15px; border-radius: 5px; }
-        </style>
-    """, unsafe_allow_html=True)
-
-    st.title("📊 Manager")
-    
-    password = st.sidebar.text_input("🔒 Code Manager", type="password")
-    if password != MANAGER_PASSWORD:
-        st.info("Mot de passe requis.")
-        return
+    st.title("💁 Réception - Gestion des Absences")
 
     if df_all.empty:
-        st.warning("Base de données vide.")
+        st.warning("Chargement des données...")
         return
 
-    # Préparation
+    # Préparation des données
     df_work = df_all.copy()
     if "Date_dt" not in df_work.columns and "Date" in df_work.columns:
          df_work["Date_dt"] = pd.to_datetime(df_work["Date"], errors='coerce')
     
-    # Message par défaut
-    default_msg = """Bonjour {prenom},
+    if "Traite" not in df_work.columns: df_work["Traite"] = False
 
-Sauf erreur de notre part, nous avons relevé les absences suivantes :
-{details}
+    # Onglets de travail
+    tab_todo, tab_history = st.tabs(["⚡ À TRAITER (Actions)", "✅ Historique Traité"])
 
-Merci de nous confirmer votre présence pour la prochaine séance.
-
-Cordialement,
-L'équipe Piscine."""
-
-    # --- ONGLETS ---
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 Dashboard", "🚨 A TRAITER", "✅ Historique Traité", "⚙️ Config"])
-
-    # ==========================
-    # TAB 1 : DASHBOARD
-    # ==========================
-    with tab1:
-        st.subheader("Vue d'ensemble")
-        nb_total = len(df_work)
-        nb_abs = len(df_work[df_work["Statut"] == "Absent"])
-        # On compte combien sont traitées (la colonne Traite existe et est vraie)
-        if "Traite" in df_work.columns:
-            nb_traites = len(df_work[(df_work["Statut"] == "Absent") & (df_work["Traite"] == True)])
-        else:
-            nb_traites = 0
-            
-        nb_a_traiter = nb_abs - nb_traites
-        
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Total Absences", nb_abs)
-        c2.metric("Déjà Traitées", nb_traites)
-        c3.metric("Reste à faire", nb_a_traiter, delta_color="inverse")
-
-    # ==========================
-    # TAB 2 : A TRAITER (Le cœur du système)
-    # ==========================
-    with tab2:
-        st.subheader("⚡ Absences nécessitant une action")
-        
-        # 1. On filtre : Statut Absent ET (Traite est vide ou Faux)
-        # On gère le cas où la colonne n'existe pas encore ou contient des vides
-        if "Traite" not in df_work.columns:
-            df_work["Traite"] = False # On crée la colonne virtuellement si elle manque
-            
-        # La condition magique : Absent ET (Pas Traité)
+    # ========================================================
+    # ONGLET 1 : LES ACTIONS A FAIRE
+    # ========================================================
+    with tab_todo:
+        # Filtre : Absent ET Pas Traité
         df_todo = df_work[ (df_work["Statut"] == "Absent") & (df_work["Traite"] != True) ]
         
-        if not df_todo.empty:
-            # On liste les gens qui ont des absences à traiter
+        if df_todo.empty:
+            st.success("🎉 Tout est à jour ! Aucune absence à traiter.")
+        else:
+            st.write(f"Il reste **{len(df_todo)} absences** en attente de traitement.")
+            
             clients_a_traiter = df_todo["Nom"].unique()
-            client_select = st.selectbox("Sélectionner un client", clients_a_traiter)
+            client_select = st.selectbox("Sélectionner un client à traiter", clients_a_traiter)
             
             if client_select:
-                # --- CALCUL DU NIVEAU (Basé sur TOUTES les absences, même traitées) ---
-                # C'est important : si c'est sa 5ème absence, même si les 4 premières sont traitées, il est P3.
-                toutes_absences_client = df_work[(df_work["Nom"] == client_select) & (df_work["Statut"] == "Absent")]
-                total_abs = len(toutes_absences_client)
+                # 1. Calcul du niveau (basé sur historique complet)
+                all_abs = df_work[(df_work["Nom"] == client_select) & (df_work["Statut"] == "Absent")]
+                nb_total = len(all_abs)
                 
-                # Récup des seuils
+                # Récup seuils
                 s1 = st.session_state.get("p1_val", 1)
                 s2 = st.session_state.get("p2_val", 3)
                 s3 = st.session_state.get("p3_val", 5)
                 
-                if total_abs >= s3: niv_txt = f"🔴 P3 ({st.session_state.get('p3_label', 'Convocation')})"
-                elif total_abs >= s2: niv_txt = f"🟠 P2 ({st.session_state.get('p2_label', 'Appel')})"
-                elif total_abs >= s1: niv_txt = f"🟡 P1 ({st.session_state.get('p1_label', 'Mail')})"
-                else: niv_txt = "OK"
+                # Détermination du niveau
+                niveau = 1
+                if nb_total >= s3: niveau = 3
+                elif nb_total >= s2: niveau = 2
+                
+                # Affichage de l'alerte
+                if niveau == 3:
+                    st.error(f"🔴 NIVEAU 3 - CONVOCATION ({nb_total} absences)")
+                elif niveau == 2:
+                    st.warning(f"🟠 NIVEAU 2 - APPEL TÉLÉPHONIQUE ({nb_total} absences)")
+                else:
+                    st.info(f"🟡 NIVEAU 1 - MAIL DE RAPPEL ({nb_total} absences)")
 
-                st.info(f"**Client :** {client_select} | **Niveau Global :** {niv_txt} ({total_abs} abs. totales)")
+                # 2. Récupération des détails (dates) pour ce client (seulement celles non traitées)
+                abs_a_traiter = df_todo[df_todo["Nom"] == client_select].sort_values("Date_dt", ascending=False)
+                ids_a_traiter = []
+                txt_details = []
                 
-                # --- DÉTAILS DES ABSENCES A TRAITER (Seulement les nouvelles) ---
-                # On récupère seulement les lignes "à faire" pour ce client
-                absences_a_traiter_client = df_todo[df_todo["Nom"] == client_select].sort_values("Date_dt", ascending=False)
+                for _, row in abs_a_traiter.iterrows():
+                    ids_a_traiter.append(row['id'])
+                    d = row["Date_dt"].strftime("%d/%m") if pd.notnull(row["Date_dt"]) else "?"
+                    c = row.get("Cours", "Séance")
+                    txt_details.append(f"- {c} le {d}")
                 
-                lignes_details = []
-                ids_a_traiter = [] # On stocke les ID pour pouvoir les cocher
-                
-                for _, row in absences_a_traiter_client.iterrows():
-                    ids_a_traiter.append(row['id']) # On garde l'ID précieusement
-                    
-                    # Mise en forme date/heure
-                    d_str = row["Date_dt"].strftime("%d/%m/%Y") if pd.notnull(row["Date_dt"]) else "Date ?"
-                    h_str = row.get("Heure") if pd.notnull(row.get("Heure")) else ""
-                    # Nettoyage heure si c'est une date complète
-                    if h_str and len(str(h_str)) > 5: 
-                        try: h_str = pd.to_datetime(h_str).strftime("%Hh%M")
-                        except: pass
-                    
-                    c_str = row.get("Cours", "Séance")
-                    if pd.isnull(c_str) or c_str == "": c_str = "Séance"
-                    
-                    lignes_details.append(f"- {c_str} le {d_str} {h_str}")
+                details_str = "\n".join(txt_details)
 
-                txt_details = "\n".join(lignes_details)
+                # 3. ACTION SELON LE NIVEAU
+                msg_final = ""
                 
-                # --- PRÉPARATION MESSAGE ---
-                tpl = st.session_state.get("msg_tpl", default_msg)
-                msg_final = tpl.replace("{prenom}", client_select).replace("{details}", txt_details)
-                
-                st.text_area("Message à envoyer :", value=msg_final, height=200)
-                
-                # --- BOUTON D'ACTION ---
-                if st.button(f"✅ Marquer {len(ids_a_traiter)} absences comme TRAITÉES"):
-                    # C'est ici qu'on écrit dans Airtable
+                if niveau == 2:
+                    # CAS P2 : APPEL (Pas de message à copier, juste un script)
+                    st.markdown("### 📞 Action : Appeler le client")
+                    st.write("Script : *'Bonjour, nous avons remarqué plusieurs absences (3+). Tout va bien ?'*")
+                    label_bouton = "✅ J'ai appelé le client (Enregistrer la trace)"
+                    
+                elif niveau == 3:
+                    # CAS P3 : CONVOCATION (Message spécial)
+                    st.markdown("### ✉️ Action : Envoyer Convocation")
+                    tpl = st.session_state.get("msg_p3_tpl", "Bonjour {prenom}, RDV nécessaire ({details}).")
+                    msg_final = tpl.replace("{prenom}", client_select).replace("{details}", details_str)
+                    st.text_area("Message à copier :", value=msg_final, height=200)
+                    label_bouton = "✅ Message Convocation envoyé"
+                    
+                else:
+                    # CAS P1 : MAIL SIMPLE
+                    st.markdown("### 📧 Action : Envoyer Mail")
+                    tpl = st.session_state.get("msg_tpl", "Bonjour {prenom}, absences : {details}.")
+                    msg_final = tpl.replace("{prenom}", client_select).replace("{details}", details_str)
+                    st.text_area("Message à copier :", value=msg_final, height=200)
+                    label_bouton = "✅ Mail envoyé"
+
+                # 4. BOUTON DE VALIDATION (Commun à tous)
+                if st.button(label_bouton, type="primary"):
                     progress = st.progress(0)
+                    date_now = datetime.now().strftime("%Y-%m-%d %H:%M") # Date et Heure actuelles
+                    
                     for idx, id_airtable in enumerate(ids_a_traiter):
                         try:
-                            # On met à jour la ligne dans Airtable en cochant "Traite"
-                            table.update(id_airtable, {"Traite": True})
+                            # On met à jour : Traite = Vrai ET Date_Traitement = Maintenant
+                            table.update(id_airtable, {
+                                "Traite": True,
+                                "Date_Traitement": date_now
+                            })
                             progress.progress((idx + 1) / len(ids_a_traiter))
                         except Exception as e:
-                            st.error(f"Erreur update : {e}")
+                            st.error(f"Erreur : {e}")
                     
-                    st.success(f"Dossier {client_select} mis à jour ! Il va disparaître de la liste.")
+                    st.success(f"Dossier {client_select} traité et archivé avec la date du {date_now} !")
                     import time
-                    time.sleep(1)
+                    time.sleep(1.5)
                     st.rerun()
 
+    # ========================================================
+    # ONGLET 2 : HISTORIQUE (Avec la date !)
+    # ========================================================
+    with tab_history:
+        st.markdown("### 🕵️ Suivi des actions effectuées")
+        
+        # On prend ceux qui sont traités
+        df_done = df_work[ (df_work["Statut"] == "Absent") & (df_work["Traite"] == True) ].copy()
+        
+        if not df_done.empty:
+            # On vérifie si la colonne date traitement existe pour l'affichage
+            cols_show = ["Nom", "Date", "Cours"]
+            if "Date_Traitement" in df_done.columns:
+                cols_show.append("Date_Traitement")
+                # Petit tri pour voir les derniers traités en haut
+                df_done.sort_values("Date_Traitement", ascending=False, inplace=True)
+            
+            st.dataframe(
+                df_done[cols_show], 
+                use_container_width=True,
+                column_config={
+                    "Date_Traitement": st.column_config.DatetimeColumn("Traité le", format="D MMM YYYY, HH:mm"),
+                    "Date": st.column_config.DateColumn("Date Absence", format="D MMM YYYY")
+                }
+            )
         else:
-            st.success("🎉 Rien à faire ! Toutes les absences ont été traitées.")
+            st.info("Aucun historique disponible.")
+# =======================
+# 4. ESPACE MANAGER (VERSION PRO CONFIG P1/P2/P3)
+# =======================
+def show_manager():
+    st.title("📊 Manager - Configuration & Stats")
+    
+    if st.sidebar.text_input("Code Manager", type="password") != MANAGER_PASSWORD:
+        st.warning("Accès refusé.")
+        return
 
-    # ==========================
-    # TAB 3 : HISTORIQUE (Ceux qu'on a déjà faits)
-    # ==========================
-    with tab3:
-        st.subheader("✅ Historique des traitements")
-        if "Traite" in df_work.columns:
-            df_done = df_work[(df_work["Statut"] == "Absent") & (df_work["Traite"] == True)]
-            if not df_done.empty:
-                st.dataframe(df_done[["Nom", "Date", "Cours", "Heure"]].sort_values("Date", ascending=False), use_container_width=True)
-            else:
-                st.info("Aucun historique pour l'instant.")
+    # Stats rapides
+    if not df_all.empty:
+        nb_abs = len(df_all[df_all["Statut"] == "Absent"])
+        if "Traite" in df_all.columns:
+            nb_traites = len(df_all[(df_all["Statut"] == "Absent") & (df_all["Traite"] == True)])
+        else:
+            nb_traites = 0
+        st.metric("Taux de traitement des absences", f"{int(nb_traites/nb_abs*100) if nb_abs>0 else 0}%")
 
-    # ==========================
-    # TAB 4 : CONFIG
-    # ==========================
-    with tab4:
-        st.header("⚙️ Config")
-        c1, c2 = st.columns(2)
+    # --- CONFIGURATION ---
+    st.header("⚙️ Configuration des Relances")
+    
+    tab_seuils, tab_msg = st.tabs(["Seuils & Labels", "Messages Types"])
+    
+    with tab_seuils:
+        c1, c2, c3 = st.columns(3)
         with c1:
-            st.subheader("Seuils")
-            p1 = st.number_input("P1", value=st.session_state.get("p1_val", 1))
-            l1 = st.text_input("Label P1", value=st.session_state.get("p1_label", "Mail"))
-            p2 = st.number_input("P2", value=st.session_state.get("p2_val", 3))
-            l2 = st.text_input("Label P2", value=st.session_state.get("p2_label", "Tel"))
-            p3 = st.number_input("P3", value=st.session_state.get("p3_val", 5))
-            l3 = st.text_input("Label P3", value=st.session_state.get("p3_label", "RDV"))
-            if st.button("Save Seuils"):
-                st.session_state.p1_val = p1; st.session_state.p1_label = l1
-                st.session_state.p2_val = p2; st.session_state.p2_label = l2
-                st.session_state.p3_val = p3; st.session_state.p3_label = l3
-                st.success("OK")
+            st.subheader("Niveau 1 (Mail)")
+            st.number_input("Seuil P1", key="p1_val", value=1)
+            st.text_input("Label P1", key="p1_label", value="Mail Rappel")
         with c2:
-            st.subheader("Message")
-            tpl = st.text_area("Template", value=st.session_state.get("msg_tpl", default_msg), height=300)
-            if st.button("Save Msg"):
-                st.session_state.msg_tpl = tpl
-                st.success("OK")
+            st.subheader("Niveau 2 (Appel)")
+            st.number_input("Seuil P2", key="p2_val", value=3)
+            st.text_input("Label P2", key="p2_label", value="Appel Tel.")
+        with c3:
+            st.subheader("Niveau 3 (RDV)")
+            st.number_input("Seuil P3", key="p3_val", value=5)
+            st.text_input("Label P3", key="p3_label", value="Convocation")
+
+    with tab_msg:
+        st.subheader("✉️ Message P1 (Mail Standard)")
+        default_p1 = "Bonjour {prenom},\n\nSauf erreur, vous avez manqué ces séances :\n{details}\n\nMerci de confirmer votre présence."
+        st.text_area("Template P1", key="msg_tpl", value=default_p1, height=150)
+        
+        st.subheader("✉️ Message P3 (Convocation)")
+        default_p3 = "Bonjour {prenom},\n\nSuite à de nombreuses absences ({details}), nous souhaiterions faire un point avec vous.\nMerci de passer à l'accueil pour fixer un rendez-vous."
+        st.text_area("Template P3 (Convocation)", key="msg_p3_tpl", value=default_p3, height=150)
+        
+        if st.button("💾 Enregistrer la configuration"):
+            st.success("Configuration sauvegardée !")
 
 # =======================
 # 5. HUB D'ACCUEIL
