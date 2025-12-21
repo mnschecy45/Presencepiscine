@@ -34,7 +34,7 @@ def save_data_to_cloud(df_new):
 
 def parse_pdf_complete(file_bytes):
     rows = []
-    # Nettoyage renforcé : on ignore les lignes de pub ou de statistiques du PDF
+    # Nettoyage des lignes inutiles
     ignore_list = ["TCPDF", "www.", "places", "réservées", "disponibles", "ouvertes", "le ", " à ", "Page ", "Généré"]
     
     try:
@@ -69,12 +69,18 @@ def parse_pdf_complete(file_bytes):
                 for l in lines[start_index:]:
                     if not l.strip() or any(x in l for x in ignore_list):
                         continue
-                        
+                    
+                    # --- CORRECTION DES NUMÉROS (V4.2) ---
                     parts = l.split()
-                    if len(parts) >= 2:
+                    # On garde uniquement les mots qui ne sont pas des nombres purs (ex: on retire 11074145)
+                    clean_parts = [p for p in parts if not p.isdigit()]
+                    
+                    if len(clean_parts) >= 2:
+                        # On considère le premier mot comme le NOM et le reste comme le Prénom
                         rows.append({
                             "Date": s_date, "Cours": c_name, "Heure": h_deb,
-                            "Nom": parts[-1], "Prenom": " ".join(parts[:-1]),
+                            "Nom": clean_parts[0], 
+                            "Prenom": " ".join(clean_parts[1:]),
                             "Absent": False, "Manuel": False, "Session_ID": f"{s_date}_{h_deb}"
                         })
     except: pass
@@ -104,11 +110,10 @@ def show_maitre_nageur():
             st.error("Aucun élève trouvé. Vérifiez le PDF.")
             return
 
-        # --- NOUVEAUTÉ : AFFICHAGE DU JOUR ET DE LA DATE ---
+        # Affichage Jour + Date
         d_obj = df['Date'].iloc[0]
         jours_fr = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
         try:
-            # On formate pour afficher : "Lundi 24/11/2025"
             date_complete = f"{jours_fr[d_obj.weekday()]} {d_obj.strftime('%d/%m/%Y')}"
         except:
             date_complete = str(d_obj)
@@ -168,7 +173,7 @@ def show_maitre_nageur():
         r1, r2, r3 = st.columns(3)
         r1.metric("Inscrits PDF", len(df[df["Manuel"]==False]))
         r2.metric("Absents", len(df[df["Absent"]==True]), delta_color="inverse")
-        r3.metric("DANS L'EAU", presents)
+        r3.metric("TOTAL DANS L'EAU", presents)
 
         if st.button("💾 ENREGISTRER DÉFINITIVEMENT", type="primary", use_container_width=True):
             save_data_to_cloud(df)
