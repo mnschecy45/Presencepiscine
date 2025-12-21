@@ -11,10 +11,8 @@ from streamlit_gsheets import GSheetsConnection
 # =======================
 st.set_page_config(page_title="Piscine Pro - Gestion Cloud", layout="wide", page_icon="🏊‍♂️")
 
-# Mots de passe
 MANAGER_PASSWORD = st.secrets.get("MANAGER_PASSWORD", "manager")
 
-# Connexion Google Sheets
 try:
     conn = st.connection("gsheets", type=GSheetsConnection)
     df_all = conn.read(ttl=0)
@@ -34,7 +32,7 @@ def save_data_to_cloud(df_new):
 
 def parse_pdf_complete(file_bytes):
     rows = []
-    # Nettoyage des lignes inutiles
+    # Mots-clés pour ignorer les lignes de bas de page
     ignore_list = ["TCPDF", "www.", "places", "réservées", "disponibles", "ouvertes", "le ", " à ", "Page ", "Généré"]
     
     try:
@@ -70,17 +68,18 @@ def parse_pdf_complete(file_bytes):
                     if not l.strip() or any(x in l for x in ignore_list):
                         continue
                     
-                    # --- CORRECTION DES NUMÉROS (V4.2) ---
-                    parts = l.split()
-                    # On garde uniquement les mots qui ne sont pas des nombres purs (ex: on retire 11074145)
-                    clean_parts = [p for p in parts if not p.isdigit()]
+                    # --- NETTOYAGE RADICAL DES CHIFFRES (V4.3) ---
+                    # On supprime tous les chiffres (0-9) de la ligne
+                    l_clean = re.sub(r'\d+', '', l).strip()
+                    # On supprime les doubles espaces créés par la suppression des chiffres
+                    l_clean = re.sub(r'\s+', ' ', l_clean)
                     
-                    if len(clean_parts) >= 2:
-                        # On considère le premier mot comme le NOM et le reste comme le Prénom
+                    parts = l_clean.split()
+                    if len(parts) >= 2:
                         rows.append({
                             "Date": s_date, "Cours": c_name, "Heure": h_deb,
-                            "Nom": clean_parts[0], 
-                            "Prenom": " ".join(clean_parts[1:]),
+                            "Nom": parts[0].upper(), 
+                            "Prenom": " ".join(parts[1:]),
                             "Absent": False, "Manuel": False, "Session_ID": f"{s_date}_{h_deb}"
                         })
     except: pass
@@ -94,20 +93,20 @@ def show_maitre_nageur():
     st.title("👨‍🏫 Appel Bassin")
     
     if st.session_state.get("appel_termine", False):
-        st.success("✅ Appel envoyé !")
+        st.success("✅ Appel envoyé au Cloud !")
         if st.button("Faire un nouvel appel"):
             st.session_state.clear()
             st.rerun()
         return
 
-    up = st.file_uploader("Charger la feuille d'appel PDF", type=["pdf"])
+    up = st.file_uploader("Charger le PDF d'appel", type=["pdf"])
     if up:
         if 'df_appel' not in st.session_state:
             st.session_state.df_appel = parse_pdf_complete(up.read())
 
         df = st.session_state.df_appel
         if df.empty:
-            st.error("Aucun élève trouvé. Vérifiez le PDF.")
+            st.error("Liste vide ou format non reconnu.")
             return
 
         # Affichage Jour + Date
@@ -121,14 +120,14 @@ def show_maitre_nageur():
         st.info(f"📅 **{date_complete}** | {df['Cours'].iloc[0]} à {df['Heure'].iloc[0]}")
 
         # Actions rapides
-        c_nav1, c_nav2, c_nav3 = st.columns([1, 1, 1])
-        if c_nav1.button("✅ TOUT PRÉSENT", use_container_width=True):
+        c1, c2, c3 = st.columns([1, 1, 1])
+        if c1.button("✅ TOUT PRÉSENT", use_container_width=True):
             for i in range(len(df)): st.session_state[f"pres_{i}"] = True
             st.rerun()
-        if c_nav2.button("❌ TOUT ABSENT", use_container_width=True):
+        if c2.button("❌ TOUT ABSENT", use_container_width=True):
             for i in range(len(df)): st.session_state[f"pres_{i}"] = False
             st.rerun()
-        c_nav3.markdown("<p style='text-align:center;'><a href='#bottom'>⬇️ Aller au résumé</a></p>", unsafe_allow_html=True)
+        c3.markdown("<p style='text-align:center;'><a href='#bottom'>⬇️ Aller au résumé</a></p>", unsafe_allow_html=True)
 
         st.write("---")
 
@@ -140,9 +139,10 @@ def show_maitre_nageur():
             bg = "#dcfce7" if st.session_state[key] else "#fee2e2"
             col_n, col_c = st.columns([4, 1])
             
+            # Affichage NOM Prénom (sans chiffres)
             col_n.markdown(f"""
                 <div style='padding:12px; background:{bg}; color:black; border-radius:8px; margin-bottom:5px; border:1px solid #ccc;'>
-                    <strong>{row['Nom'].upper()} {row['Prenom']}</strong>
+                    <strong>{row['Nom']} {row['Prenom']}</strong>
                 </div>
             """, unsafe_allow_html=True)
             
@@ -155,13 +155,13 @@ def show_maitre_nageur():
             with st.form("form_ajout", clear_on_submit=True):
                 nom_m = st.text_input("Nom").upper()
                 prenom_m = st.text_input("Prénom")
-                if st.form_submit_button("Valider l'ajout"):
+                if st.form_submit_button("Valider"):
                     if nom_m and prenom_m:
-                        nouveau_row = {
+                        nouveau = {
                             "Date": df['Date'].iloc[0], "Cours": df['Cours'].iloc[0], "Heure": df['Heure'].iloc[0],
                             "Nom": nom_m, "Prenom": prenom_m, "Absent": False, "Manuel": True, "Session_ID": df['Session_ID'].iloc[0]
                         }
-                        st.session_state.df_appel = pd.concat([df, pd.DataFrame([nouveau_row])], ignore_index=True)
+                        st.session_state.df_appel = pd.concat([df, pd.DataFrame([nouveau])], ignore_index=True)
                         st.rerun()
 
         st.markdown("<div id='bottom'></div>", unsafe_allow_html=True)
@@ -169,11 +169,11 @@ def show_maitre_nageur():
         
         # Résumé
         presents = len(df[df["Absent"] == False])
-        st.subheader("📋 Résumé de l'appel")
+        st.subheader("📋 Résumé")
         r1, r2, r3 = st.columns(3)
-        r1.metric("Inscrits PDF", len(df[df["Manuel"]==False]))
+        r1.metric("Inscrits", len(df[df["Manuel"]==False]))
         r2.metric("Absents", len(df[df["Absent"]==True]), delta_color="inverse")
-        r3.metric("TOTAL DANS L'EAU", presents)
+        r3.metric("DANS L'EAU", presents)
 
         if st.button("💾 ENREGISTRER DÉFINITIVEMENT", type="primary", use_container_width=True):
             save_data_to_cloud(df)
@@ -186,29 +186,29 @@ def show_maitre_nageur():
 # 4. RÉCEPTION & MANAGER
 # =======================
 def show_reception():
-    st.title("💁 Réception - Recherche")
-    s = st.text_input("🔎 Entrez le nom de l'adhérent")
+    st.title("💁 Réception")
+    s = st.text_input("🔎 Rechercher Nom")
     if s and not df_all.empty:
         res = df_all[df_all["Nom"].str.contains(s, case=False, na=False) | df_all["Prenom"].str.contains(s, case=False, na=False)]
         st.dataframe(res[["Date", "Cours", "Absent"]].sort_values("Date", ascending=False), use_container_width=True)
 
 def show_manager():
-    st.title("📊 Espace Manager")
-    if st.text_input("Code d'accès", type="password") == MANAGER_PASSWORD:
+    st.title("📊 Manager")
+    if st.text_input("Mot de passe", type="password") == MANAGER_PASSWORD:
         if df_all.empty: return
         today = pd.Timestamp.now().normalize()
         df_p = df_all[df_all["Absent"] == False]
         if not df_p.empty:
             last_v = df_p.groupby(["Nom", "Prenom"])["Date_dt"].max().reset_index()
-            last_v["Jours_absence"] = (today - last_v["Date_dt"]).dt.days
-            risk = last_v[last_v["Jours_absence"] > 21].sort_values("Jours_absence", ascending=False)
-            st.dataframe(risk, use_container_width=True)
+            last_v["Absence"] = (today - last_v["Date_dt"]).dt.days
+            st.write("🏃‍♂️ Alertes Churn (> 21 jours) :")
+            st.dataframe(last_v[last_v["Absence"] > 21].sort_values("Absence", ascending=False), use_container_width=True)
 
 # =======================
 # 5. HUB D'ACCUEIL
 # =======================
 def show_main_hub():
-    st.markdown("<h1 style='text-align: center;'>🏊‍♂️ Application Piscine Pro</h1>", unsafe_allow_html=True)
+    st.markdown("<h1 style='text-align: center;'>🏊‍♂️ Piscine Pro</h1>", unsafe_allow_html=True)
     st.write("---")
     c1, c2, c3 = st.columns(3)
     if c1.button("👨‍🏫 MAÎTRE-NAGEUR", use_container_width=True):
