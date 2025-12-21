@@ -9,7 +9,7 @@ from pyairtable import Api  # <--- On remplace GSheets par Airtable
 # =======================
 # 0. TES CLES AIRTABLE (A REMPLIR ICI)
 # =======================
-API_TOKEN = "patpatlhcrzgExTU2rJ4" # Ton token
+API_TOKEN = "pat85co2rWjG48EDz.e6e628e1b5da543271388625e0006a0186a2e424ff7a3ae6e146508794f8edbd" # Ton token
 BASE_ID = "app390ytx6oa2rbge"    # Ton ID de base
 TABLE_NAME = "Presences"             # Nom de l'onglet
 
