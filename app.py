@@ -400,14 +400,12 @@ def show_manager():
     with tab4:
         st.subheader("⚡ Traitement des Absences")
         
-        # On vérifie qu'on a bien des gens à traiter (variable créée dans l'onglet 3)
         if 'bilan_absences' in locals() and not bilan_absences.empty:
             
             liste_clients = bilan_absences["Nom"].tolist()
             client_select = st.selectbox("Qui voulez-vous relancer ?", liste_clients)
             
             if client_select:
-                # Infos du client
                 info = bilan_absences[bilan_absences["Nom"] == client_select].iloc[0]
                 nb = info["Total_Absences"]
                 niv = info["Niveau"]
@@ -415,21 +413,44 @@ def show_manager():
                 st.info(f"**Client :** {client_select} | **Niveau :** {niv} | **Total Absences :** {nb}")
                 
                 # --- GÉNÉRATION DÉTAILS ---
-                # On va chercher les dates précises de ses absences
                 ses_absences = df_work[(df_work["Nom"] == client_select) & (df_work["Statut"] == "Absent")]
+                # On trie pour avoir la plus récente en premier
                 ses_absences = ses_absences.sort_values("Date_dt", ascending=False)
                 
                 lignes_details = []
                 for _, row in ses_absences.iterrows():
-                    d = row["Date_dt"].strftime("%d/%m/%Y") if pd.notnull(row["Date_dt"]) else "Date inconue"
-                    h = row.get("Heure", "?")
-                    c = row.get("Cours", "?")
-                    lignes_details.append(f"- {c} le {d} à {h}")
+                    # 1. NETTOYAGE DE LA DATE
+                    if pd.notnull(row["Date_dt"]):
+                        date_str = row["Date_dt"].strftime("%d/%m/%Y") # Donne 17/12/2025
+                        # On essaie de récupérer l'heure depuis la date (ex: 17h30)
+                        heure_str = row["Date_dt"].strftime("%Hh%M")
+                    else:
+                        date_str = "Date inconnue"
+                        heure_str = ""
+
+                    # 2. NETTOYAGE DU COURS
+                    # Si la colonne Cours existe et n'est pas vide, on la prend. Sinon on met "Séance"
+                    cours_brut = row.get("Cours")
+                    if cours_brut and str(cours_brut) != "nan" and str(cours_brut) != "?":
+                        cours_str = str(cours_brut)
+                    else:
+                        cours_str = "Séance" # Valeur par défaut si pas de nom de cours
+
+                    # 3. CONSTRUCTION DE LA LIGNE PROPRE
+                    # Résultat : "- Aquabike le 17/12/2025 à 18h30"
+                    if heure_str and heure_str != "00h00":
+                        ligne = f"- {cours_str} le {date_str} à {heure_str}"
+                    else:
+                        # Si pas d'heure précise, on met juste la date
+                        ligne = f"- {cours_str} le {date_str}"
+                        
+                    lignes_details.append(ligne)
                 
                 txt_details = "\n".join(lignes_details)
                 
                 # --- INJECTION DANS LE MESSAGE ---
-                tpl = st.session_state.get("msg_tpl", "")
+                tpl = st.session_state.get("msg_tpl", default_msg) 
+                
                 msg_final = tpl.replace("{prenom}", client_select).replace("{details}", txt_details)
                 
                 st.text_area("Message prêt à copier :", value=msg_final, height=250)
