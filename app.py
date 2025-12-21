@@ -32,7 +32,6 @@ def save_data_to_cloud(df_new):
 
 def parse_pdf_complete(file_bytes):
     rows = []
-    # Mots-clés pour ignorer les lignes de bas de page
     ignore_list = ["TCPDF", "www.", "places", "réservées", "disponibles", "ouvertes", "le ", " à ", "Page ", "Généré"]
     
     try:
@@ -68,10 +67,8 @@ def parse_pdf_complete(file_bytes):
                     if not l.strip() or any(x in l for x in ignore_list):
                         continue
                     
-                    # --- NETTOYAGE RADICAL DES CHIFFRES (V4.3) ---
-                    # On supprime tous les chiffres (0-9) de la ligne
+                    # Nettoyage des chiffres (V4.3 logic)
                     l_clean = re.sub(r'\d+', '', l).strip()
-                    # On supprime les doubles espaces créés par la suppression des chiffres
                     l_clean = re.sub(r'\s+', ' ', l_clean)
                     
                     parts = l_clean.split()
@@ -93,7 +90,7 @@ def show_maitre_nageur():
     st.title("👨‍🏫 Appel Bassin")
     
     if st.session_state.get("appel_termine", False):
-        st.success("✅ Appel envoyé au Cloud !")
+        st.success("✅ Appel enregistré !")
         if st.button("Faire un nouvel appel"):
             st.session_state.clear()
             st.rerun()
@@ -106,47 +103,51 @@ def show_maitre_nageur():
 
         df = st.session_state.df_appel
         if df.empty:
-            st.error("Liste vide ou format non reconnu.")
+            st.error("Erreur de lecture du PDF.")
             return
 
         # Affichage Jour + Date
         d_obj = df['Date'].iloc[0]
         jours_fr = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
-        try:
-            date_complete = f"{jours_fr[d_obj.weekday()]} {d_obj.strftime('%d/%m/%Y')}"
-        except:
-            date_complete = str(d_obj)
-
+        date_complete = f"{jours_fr[d_obj.weekday()]} {d_obj.strftime('%d/%m/%Y')}"
         st.info(f"📅 **{date_complete}** | {df['Cours'].iloc[0]} à {df['Heure'].iloc[0]}")
 
-        # Actions rapides
+        # --- ACTIONS RAPIDES (CORRIGÉES V4.4) ---
         c1, c2, c3 = st.columns([1, 1, 1])
         if c1.button("✅ TOUT PRÉSENT", use_container_width=True):
-            for i in range(len(df)): st.session_state[f"pres_{i}"] = True
+            for i in range(len(df)):
+                st.session_state[f"cb_{i}"] = True # Force l'état du widget
             st.rerun()
+            
         if c2.button("❌ TOUT ABSENT", use_container_width=True):
-            for i in range(len(df)): st.session_state[f"pres_{i}"] = False
+            for i in range(len(df)):
+                st.session_state[f"cb_{i}"] = False # Force l'état du widget
             st.rerun()
+            
         c3.markdown("<p style='text-align:center;'><a href='#bottom'>⬇️ Aller au résumé</a></p>", unsafe_allow_html=True)
 
         st.write("---")
 
-        # Liste des élèves
+        # --- LISTE DES ÉLÈVES ---
         for idx, row in df.iterrows():
-            key = f"pres_{idx}"
-            if key not in st.session_state: st.session_state[key] = False
+            key = f"cb_{idx}"
+            # Initialisation de l'état si première fois
+            if key not in st.session_state:
+                st.session_state[key] = False
             
+            # Couleur basée sur l'état réel de la case
             bg = "#dcfce7" if st.session_state[key] else "#fee2e2"
             col_n, col_c = st.columns([4, 1])
             
-            # Affichage NOM Prénom (sans chiffres)
             col_n.markdown(f"""
                 <div style='padding:12px; background:{bg}; color:black; border-radius:8px; margin-bottom:5px; border:1px solid #ccc;'>
                     <strong>{row['Nom']} {row['Prenom']}</strong>
                 </div>
             """, unsafe_allow_html=True)
             
-            st.session_state[key] = col_c.checkbox("P", key=f"cb_{idx}", value=st.session_state[key], label_visibility="collapsed")
+            # Le widget est lié à la clé dans session_state
+            st.checkbox("P", key=key, label_visibility="collapsed")
+            # Mise à jour de la colonne Absent pour le résumé et le Cloud
             df.at[idx, "Absent"] = not st.session_state[key]
 
         # Ajout manuel
@@ -187,21 +188,20 @@ def show_maitre_nageur():
 # =======================
 def show_reception():
     st.title("💁 Réception")
-    s = st.text_input("🔎 Rechercher Nom")
+    s = st.text_input("🔎 Nom")
     if s and not df_all.empty:
         res = df_all[df_all["Nom"].str.contains(s, case=False, na=False) | df_all["Prenom"].str.contains(s, case=False, na=False)]
         st.dataframe(res[["Date", "Cours", "Absent"]].sort_values("Date", ascending=False), use_container_width=True)
 
 def show_manager():
     st.title("📊 Manager")
-    if st.text_input("Mot de passe", type="password") == MANAGER_PASSWORD:
+    if st.text_input("Code", type="password") == MANAGER_PASSWORD:
         if df_all.empty: return
         today = pd.Timestamp.now().normalize()
         df_p = df_all[df_all["Absent"] == False]
         if not df_p.empty:
             last_v = df_p.groupby(["Nom", "Prenom"])["Date_dt"].max().reset_index()
             last_v["Absence"] = (today - last_v["Date_dt"]).dt.days
-            st.write("🏃‍♂️ Alertes Churn (> 21 jours) :")
             st.dataframe(last_v[last_v["Absence"] > 21].sort_values("Absence", ascending=False), use_container_width=True)
 
 # =======================
