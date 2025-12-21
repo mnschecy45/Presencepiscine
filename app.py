@@ -269,6 +269,7 @@ def show_manager():
     st.markdown("""
         <style>
         .stMetric { background-color: #0E1117; border: 1px solid #303030; padding: 15px; border-radius: 5px; }
+        .stAlert { background-color: #1E1E1E; color: white; border: 1px solid #444; }
         </style>
     """, unsafe_allow_html=True)
 
@@ -300,7 +301,6 @@ def show_manager():
         st.subheader("Vue d'ensemble")
         today = pd.Timestamp.now().normalize()
         
-        # Métriques simples
         nb_total = len(df_work)
         nb_absents = len(df_work[df_work["Statut"] == "Absent"])
         taux = ((nb_total - nb_absents) / nb_total * 100) if nb_total > 0 else 0
@@ -309,14 +309,12 @@ def show_manager():
         c1.metric("Inscrits", nb_total)
         c2.metric("Absents", nb_absents)
         c3.metric("Présence", f"{taux:.1f}%")
-        c4.metric("Ajouts", 0) # Placeholder
+        c4.metric("Dernier ajout", df_work["Date"].max() if not df_work.empty else "-")
 
         st.write("---")
-        # Graphique fréquentation
         daily = df_work[df_work["Statut"] == "Présent"].groupby("Date_dt").size()
         st.area_chart(daily, height=250)
 
-        # Tableaux stats
         c_g, c_d = st.columns(2)
         with c_g:
             st.markdown("### Par Cours")
@@ -328,70 +326,61 @@ def show_manager():
                 st.dataframe(df_work["Heure"].value_counts(), use_container_width=True)
 
     # ==========================
-    # TAB 5 : CONFIG (Celle de votre image !)
+    # TAB 5 : CONFIG (Réglages Seuils & Message)
     # ==========================
     with tab5:
         st.header("⚙️ Config")
-        
         c_seuils, c_msg = st.columns([1, 1])
         
         with c_seuils:
-            st.subheader("Seuils")
-            
+            st.subheader("Seuils d'alerte")
             # P1
             c1a, c1b = st.columns([1, 2])
-            p1_val = c1a.number_input("Seuil P1", value=st.session_state.get("p1_val", 1), min_value=1)
+            p1_val = c1a.number_input("Seuil P1 (Jours)", value=st.session_state.get("p1_val", 7), min_value=1)
             p1_label = c1b.text_input("Label P1", value=st.session_state.get("p1_label", "Envoyer un mail"))
-            
             # P2
             c2a, c2b = st.columns([1, 2])
-            p2_val = c2a.number_input("Seuil P2", value=st.session_state.get("p2_val", 3), min_value=1)
+            p2_val = c2a.number_input("Seuil P2 (Jours)", value=st.session_state.get("p2_val", 14), min_value=1)
             p2_label = c2b.text_input("Label P2", value=st.session_state.get("p2_label", "Appeler le client"))
-            
             # P3
             c3a, c3b = st.columns([1, 2])
-            p3_val = c3a.number_input("Seuil P3", value=st.session_state.get("p3_val", 5), min_value=1)
+            p3_val = c3a.number_input("Seuil P3 (Jours)", value=st.session_state.get("p3_val", 21), min_value=1)
             p3_label = c3b.text_input("Label P3", value=st.session_state.get("p3_label", "Convocation / RDV"))
             
-            if st.button("💾 Save Seuils"):
-                st.session_state["p1_val"] = p1_val
-                st.session_state["p1_label"] = p1_label
-                st.session_state["p2_val"] = p2_val
-                st.session_state["p2_label"] = p2_label
-                st.session_state["p3_val"] = p3_val
-                st.session_state["p3_label"] = p3_label
+            if st.button("💾 Sauvegarder Seuils"):
+                st.session_state["p1_val"] = p1_val; st.session_state["p1_label"] = p1_label
+                st.session_state["p2_val"] = p2_val; st.session_state["p2_label"] = p2_label
+                st.session_state["p3_val"] = p3_val; st.session_state["p3_label"] = p3_label
                 st.success("Seuils enregistrés !")
 
         with c_msg:
-            st.subheader("Message")
-            st.caption("Template")
-            default_msg = "Bonjour {prenom},\n\nSauf erreur de notre part, nous avons relevé les absences suivantes :\n{details}\n\nAfin de ne pas perdre le bénéfice de votre progression, merci de nous confirmer votre présence pour la prochaine séance."
-            tpl = st.text_area("", value=st.session_state.get("msg_tpl", default_msg), height=250)
+            st.subheader("Template du Message")
+            st.caption("Utilisez {prenom} pour le nom et {details} pour la liste des absences.")
+            default_msg = "Bonjour {prenom},\n\nSauf erreur de notre part, nous avons relevé les absences suivantes :\n{details}\n\nAfin de ne pas perdre le bénéfice de votre progression, merci de nous confirmer votre présence pour la prochaine séance.\n\nCordialement,\nL'équipe Piscine."
+            tpl = st.text_area("Contenu", value=st.session_state.get("msg_tpl", default_msg), height=300)
             
-            if st.button("💾 Save Msg"):
+            if st.button("💾 Sauvegarder Message"):
                 st.session_state["msg_tpl"] = tpl
-                st.success("Message type enregistré !")
+                st.success("Template enregistré !")
 
     # ==========================
-    # TAB 3 : RISQUE DÉPART (Connecté aux seuils)
+    # TAB 3 : RISQUE DÉPART (Calcul automatique)
     # ==========================
     with tab3:
         st.subheader("📉 Risque Départ")
-        
-        # Calcul des absences
         today = pd.Timestamp.now().normalize()
+        
+        # On ne regarde que ceux qui sont déjà venus au moins une fois
         df_p = df_work[df_work["Statut"] == "Présent"]
         
         if not df_p.empty:
             last_venue = df_p.groupby("Nom")["Date_dt"].max().reset_index()
             last_venue["Jours_Absent"] = (today - last_venue["Date_dt"]).dt.days
             
-            # On récupère les seuils configurés
-            s1 = st.session_state.get("p1_val", 1)
-            s2 = st.session_state.get("p2_val", 3)
-            s3 = st.session_state.get("p3_val", 5)
+            s1 = st.session_state.get("p1_val", 7)
+            s2 = st.session_state.get("p2_val", 14)
+            s3 = st.session_state.get("p3_val", 21)
             
-            # On classe les gens
             def get_niveau(jours):
                 if jours >= s3: return f"🔴 P3 ({st.session_state.get('p3_label', 'Convocation')})"
                 elif jours >= s2: return f"🟠 P2 ({st.session_state.get('p2_label', 'Appel')})"
@@ -399,31 +388,69 @@ def show_manager():
                 else: return "OK"
 
             last_venue["Niveau"] = last_venue["Jours_Absent"].apply(get_niveau)
-            
-            # On affiche ceux qui sont en alerte (pas "OK")
             alertes = last_venue[last_venue["Niveau"] != "OK"].sort_values("Jours_Absent", ascending=False)
             
             st.dataframe(alertes, use_container_width=True)
         else:
-            st.info("Pas assez de données.")
+            st.info("Pas assez de données de présence.")
 
     # ==========================
-    # TAB 4 : ACTIONS
+    # TAB 4 : ACTIONS (C'est ici que la magie opère !)
     # ==========================
     with tab4:
-        st.subheader("⚡ Actions Rapides")
+        st.subheader("⚡ Actions Re-quises")
+        
         if 'alertes' in locals() and not alertes.empty:
-            client = st.selectbox("Client à traiter", alertes["Nom"].unique())
+            # Liste déroulante des gens à relancer
+            liste_clients = alertes["Nom"].unique()
+            client_select = st.selectbox("Sélectionner un client à traiter", liste_clients)
             
-            if client:
-                info = alertes[alertes["Nom"] == client].iloc[0]
-                st.info(f"Niveau : {info['Niveau']} (Absent depuis {info['Jours_Absent']} jours)")
+            if client_select:
+                # 1. On récupère les infos générales
+                info_client = alertes[alertes["Nom"] == client_select].iloc[0]
+                niveau = info_client['Niveau']
+                jours = info_client['Jours_Absent']
                 
-                # Génération du message avec le template
+                st.markdown(f"**Statut :** {niveau} | **Absent depuis :** {jours} jours")
+                
+                # 2. ON GÉNÈRE LA LISTE DÉTAILLÉE DES ABSENCES (Le point clé !)
+                # On filtre tout l'historique de CE client
+                historique_client = df_work[df_work["Nom"] == client_select]
+                # On ne garde que ses absences
+                absences_client = historique_client[historique_client["Statut"] == "Absent"].sort_values("Date_dt", ascending=False)
+                
+                details_txt = ""
+                if not absences_client.empty:
+                    lignes = []
+                    for idx, row in absences_client.iterrows():
+                        # On formate la date (ex: 17/12)
+                        date_str = row["Date_dt"].strftime("%d/%m") if pd.notnull(row["Date_dt"]) else "Date inconnue"
+                        # On récupère l'heure et le cours (s'ils existent, sinon "?")
+                        heure_str = row["Heure"] if "Heure" in row else "?"
+                        cours_str = row["Cours"] if "Cours" in row else "?"
+                        
+                        # On construit la ligne : "- Le 17/12 à 12h15 (Aquabiking)"
+                        lignes.append(f"- Le {date_str} à {heure_str} ({cours_str})")
+                    
+                    # On joint tout avec des sauts de ligne
+                    details_txt = "\n".join(lignes)
+                else:
+                    details_txt = "(Aucune absence spécifique notée, client juste inactif)"
+
+                # 3. Injection dans le template
                 tpl = st.session_state.get("msg_tpl", "")
-                msg_final = tpl.replace("{prenom}", client).replace("{details}", f"Absence de {info['Jours_Absent']} jours.")
+                # On remplace {details} par la liste qu'on vient de créer
+                msg_final = tpl.replace("{prenom}", client_select).replace("{details}", details_txt)
                 
-                st.text_area("Message généré :", value=msg_final, height=200)
+                # 4. Affichage
+                st.text_area("Message généré (prêt à copier) :", value=msg_final, height=300)
+                
+                # Bouton mailto (Bonus)
+                if st.button("✅ Marquer comme FAIT (Simulation)"):
+                    st.toast(f"Action enregistrée pour {client_select} !", icon="🎉")
+
+        else:
+            st.success("Aucune action requise pour le moment. Tout le monde est assidu ! 👏")
 
 # =======================
 # 5. HUB D'ACCUEIL
