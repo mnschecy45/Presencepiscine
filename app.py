@@ -33,22 +33,17 @@ def save_data_to_cloud(df_new):
 def parse_pdf_complete(file_bytes):
     rows = []
     ignore_list = ["TCPDF", "www.", "places", "réservées", "disponibles", "ouvertes", "le ", " à ", "Page ", "Généré"]
-    
     try:
         with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
             for idx, page in enumerate(pdf.pages):
                 txt = page.extract_text()
                 if not txt: continue
                 lines = txt.splitlines()
-                
-                # Extraction Date
                 d_str = ""
                 for l in lines[:15]:
                     m = re.search(r"\d{2}/\d{2}/\d{4}", l)
                     if m: d_str = m.group(0); break
                 s_date = datetime.strptime(d_str, "%d/%m/%Y").date() if d_str else date.today()
-                
-                # Extraction Cours et Heure
                 c_name, h_deb = "Cours Inconnu", "00h00"
                 for l in lines[:15]:
                     ts = re.findall(r"\d{1,2}h\d{2}", l)
@@ -56,27 +51,21 @@ def parse_pdf_complete(file_bytes):
                         h_deb = ts[0]
                         c_name = l[:l.index(ts[0])].strip()
                         break
-                
                 start_index = 0
                 for i, l in enumerate(lines):
                     if "N° réservation" in l:
                         start_index = i + 1
                         break
-                
                 for l in lines[start_index:]:
                     if not l.strip() or any(x in l for x in ignore_list):
                         continue
-                    
-                    # Nettoyage des chiffres (V4.3 logic)
                     l_clean = re.sub(r'\d+', '', l).strip()
                     l_clean = re.sub(r'\s+', ' ', l_clean)
-                    
                     parts = l_clean.split()
                     if len(parts) >= 2:
                         rows.append({
                             "Date": s_date, "Cours": c_name, "Heure": h_deb,
-                            "Nom": parts[0].upper(), 
-                            "Prenom": " ".join(parts[1:]),
+                            "Nom": parts[0].upper(), "Prenom": " ".join(parts[1:]),
                             "Absent": False, "Manuel": False, "Session_ID": f"{s_date}_{h_deb}"
                         })
     except: pass
@@ -92,36 +81,43 @@ def show_maitre_nageur():
     if st.session_state.get("appel_termine", False):
         st.success("✅ Appel enregistré !")
         if st.button("Faire un nouvel appel"):
-            st.session_state.clear()
+            # On nettoie tout pour le nouvel appel
+            for key in list(st.session_state.keys()):
+                if key.startswith("cb_") or key == "df_appel":
+                    del st.session_state[key]
+            st.session_state.appel_termine = False
             st.rerun()
         return
 
     up = st.file_uploader("Charger le PDF d'appel", type=["pdf"])
+    
+    # Si on charge un nouveau fichier, on nettoie les anciennes cases
     if up:
-        if 'df_appel' not in st.session_state:
+        if 'current_file' not in st.session_state or st.session_state.current_file != up.name:
+            st.session_state.current_file = up.name
+            for key in list(st.session_state.keys()):
+                if key.startswith("cb_"):
+                    del st.session_state[key]
             st.session_state.df_appel = parse_pdf_complete(up.read())
 
         df = st.session_state.df_appel
-        if df.empty:
-            st.error("Erreur de lecture du PDF.")
-            return
-
+        
         # Affichage Jour + Date
         d_obj = df['Date'].iloc[0]
         jours_fr = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
         date_complete = f"{jours_fr[d_obj.weekday()]} {d_obj.strftime('%d/%m/%Y')}"
         st.info(f"📅 **{date_complete}** | {df['Cours'].iloc[0]} à {df['Heure'].iloc[0]}")
 
-        # --- ACTIONS RAPIDES (CORRIGÉES V4.4) ---
+        # --- ACTIONS RAPIDES (LOGIQUE FORCÉE V4.5) ---
         c1, c2, c3 = st.columns([1, 1, 1])
         if c1.button("✅ TOUT PRÉSENT", use_container_width=True):
             for i in range(len(df)):
-                st.session_state[f"cb_{i}"] = True # Force l'état du widget
+                st.session_state[f"cb_{i}"] = True
             st.rerun()
             
         if c2.button("❌ TOUT ABSENT", use_container_width=True):
             for i in range(len(df)):
-                st.session_state[f"cb_{i}"] = False # Force l'état du widget
+                st.session_state[f"cb_{i}"] = False
             st.rerun()
             
         c3.markdown("<p style='text-align:center;'><a href='#bottom'>⬇️ Aller au résumé</a></p>", unsafe_allow_html=True)
@@ -131,23 +127,22 @@ def show_maitre_nageur():
         # --- LISTE DES ÉLÈVES ---
         for idx, row in df.iterrows():
             key = f"cb_{idx}"
-            # Initialisation de l'état si première fois
+            # Initialisation par défaut si la clé n'existe pas
             if key not in st.session_state:
                 st.session_state[key] = False
             
-            # Couleur basée sur l'état réel de la case
+            # La couleur suit strictement l'état de la session_state
             bg = "#dcfce7" if st.session_state[key] else "#fee2e2"
-            col_n, col_c = st.columns([4, 1])
             
+            col_n, col_c = st.columns([4, 1])
             col_n.markdown(f"""
                 <div style='padding:12px; background:{bg}; color:black; border-radius:8px; margin-bottom:5px; border:1px solid #ccc;'>
                     <strong>{row['Nom']} {row['Prenom']}</strong>
                 </div>
             """, unsafe_allow_html=True)
             
-            # Le widget est lié à la clé dans session_state
+            # Utilisation du paramètre 'value' pour forcer l'affichage synchronisé
             st.checkbox("P", key=key, label_visibility="collapsed")
-            # Mise à jour de la colonne Absent pour le résumé et le Cloud
             df.at[idx, "Absent"] = not st.session_state[key]
 
         # Ajout manuel
@@ -188,20 +183,21 @@ def show_maitre_nageur():
 # =======================
 def show_reception():
     st.title("💁 Réception")
-    s = st.text_input("🔎 Nom")
+    s = st.text_input("🔎 Rechercher par Nom")
     if s and not df_all.empty:
         res = df_all[df_all["Nom"].str.contains(s, case=False, na=False) | df_all["Prenom"].str.contains(s, case=False, na=False)]
         st.dataframe(res[["Date", "Cours", "Absent"]].sort_values("Date", ascending=False), use_container_width=True)
 
 def show_manager():
     st.title("📊 Manager")
-    if st.text_input("Code", type="password") == MANAGER_PASSWORD:
+    if st.text_input("Code confidentiel", type="password") == MANAGER_PASSWORD:
         if df_all.empty: return
         today = pd.Timestamp.now().normalize()
         df_p = df_all[df_all["Absent"] == False]
         if not df_p.empty:
             last_v = df_p.groupby(["Nom", "Prenom"])["Date_dt"].max().reset_index()
             last_v["Absence"] = (today - last_v["Date_dt"]).dt.days
+            st.write("🏃‍♂️ Alertes (Absent > 21 jours) :")
             st.dataframe(last_v[last_v["Absence"] > 21].sort_values("Absence", ascending=False), use_container_width=True)
 
 # =======================
