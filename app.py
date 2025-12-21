@@ -4,7 +4,14 @@ import pdfplumber
 import re
 import io
 from datetime import datetime, date
-from streamlit_gsheets import GSheetsConnection
+from pyairtable import Api  # <--- On remplace GSheets par Airtable
+
+# =======================
+# 0. TES CLES AIRTABLE (A REMPLIR ICI)
+# =======================
+API_TOKEN = "patpatlhcrzgExTU2rJ4" # Ton token
+BASE_ID = "app390ytx6oa2rbge"    # Ton ID de base
+TABLE_NAME = "Presences"             # Nom de l'onglet
 
 # =======================
 # 1. CONFIGURATION GÉNÉRALE
@@ -13,22 +20,66 @@ st.set_page_config(page_title="Piscine Pro - Gestion Cloud", layout="wide", page
 
 MANAGER_PASSWORD = st.secrets.get("MANAGER_PASSWORD", "manager")
 
+# --- CONNEXION AIRTABLE ---
 try:
-    conn = st.connection("gsheets", type=GSheetsConnection)
-    df_all = conn.read(ttl=0)
-    if not df_all.empty:
-        df_all["Date_dt"] = pd.to_datetime(df_all["Date"], dayfirst=True, errors='coerce')
-except:
+    api = Api(API_TOKEN)
+    table = api.table(BASE_ID, TABLE_NAME)
+    
+    # On récupère toutes les données pour l'historique (Réception/Manager)
+    records = table.all()
+    if records:
+        # On transforme le format bizarre d'Airtable en tableau simple
+        data = [r['fields'] for r in records]
+        df_all = pd.DataFrame(data)
+        
+        # Petit nettoyage des dates pour que les calculs marchent
+        if "Date" in df_all.columns:
+            df_all["Date_dt"] = pd.to_datetime(df_all["Date"], errors='coerce')
+    else:
+        df_all = pd.DataFrame()
+except Exception as e:
+    st.error(f"Erreur de connexion Airtable : {e}")
     df_all = pd.DataFrame()
 
 # =======================
 # 2. LOGIQUE DE SAUVEGARDE & PDF
 # =======================
 def save_data_to_cloud(df_new):
-    existing_data = conn.read(ttl=0)
-    df_new["Date"] = pd.to_datetime(df_new["Date"]).dt.strftime('%d/%m/%Y')
-    updated_data = pd.concat([existing_data, df_new], ignore_index=True)
-    conn.update(data=updated_data)
+    """
+    Envoie les nouvelles lignes vers Airtable une par une.
+    """
+    progress_bar = st.progress(0)
+    total = len(df_new)
+    
+    for i, row in df_new.iterrows():
+        try:
+            # On prépare la ligne pour Airtable
+            # On convertit le booléen 'Absent' en texte "Absent" ou "Présent"
+            statut_final = "Absent" if row["Absent"] else "Présent"
+            
+            # Conversion de la date en chaine de caractères pour Airtable
+            date_str = row["Date"].strftime("%Y-%m-%d") if isinstance(row["Date"], (date, datetime)) else str(row["Date"])
+
+            record = {
+                "Nom": row["Nom"],
+                "Statut": statut_final, 
+                "Date": date_str,
+                # On peut ajouter d'autres champs si ils existent dans Airtable
+                # "Cours": row["Cours"], 
+                # "Heure": row["Heure"]
+            }
+            
+            # Envoi vers Airtable
+            table.create(record)
+            
+            # Mise à jour barre de progression
+            progress_bar.progress((i + 1) / total)
+            
+        except Exception as e:
+            st.error(f"Erreur lors de l'enregistrement de {row['Nom']}: {e}")
+
+    progress_bar.empty()
+    st.toast("Enregistrement Airtable terminé !", icon="☁️")
 
 def parse_pdf_complete(file_bytes):
     rows = []
@@ -79,7 +130,7 @@ def show_maitre_nageur():
     st.title("👨‍🏫 Appel Bassin")
     
     if st.session_state.get("appel_termine", False):
-        st.success("✅ Appel enregistré !")
+        st.success("✅ Appel enregistré dans Airtable !")
         if st.button("Faire un nouvel appel"):
             # On nettoie tout pour le nouvel appel
             for key in list(st.session_state.keys()):
@@ -103,80 +154,86 @@ def show_maitre_nageur():
         df = st.session_state.df_appel
         
         # Affichage Jour + Date
-        d_obj = df['Date'].iloc[0]
-        jours_fr = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
-        date_complete = f"{jours_fr[d_obj.weekday()]} {d_obj.strftime('%d/%m/%Y')}"
-        st.info(f"📅 **{date_complete}** | {df['Cours'].iloc[0]} à {df['Heure'].iloc[0]}")
+        if not df.empty:
+            d_obj = df['Date'].iloc[0]
+            jours_fr = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
+            # Gestion sécurité si d_obj n'est pas une date
+            if isinstance(d_obj, (date, datetime)):
+                date_complete = f"{jours_fr[d_obj.weekday()]} {d_obj.strftime('%d/%m/%Y')}"
+            else:
+                date_complete = str(d_obj)
 
-        # --- ACTIONS RAPIDES (LOGIQUE FORCÉE V4.5) ---
-        c1, c2, c3 = st.columns([1, 1, 1])
-        if c1.button("✅ TOUT PRÉSENT", use_container_width=True):
-            for i in range(len(df)):
-                st.session_state[f"cb_{i}"] = True
-            st.rerun()
+            st.info(f"📅 **{date_complete}** | {df['Cours'].iloc[0]} à {df['Heure'].iloc[0]}")
+
+            # --- ACTIONS RAPIDES ---
+            c1, c2, c3 = st.columns([1, 1, 1])
+            if c1.button("✅ TOUT PRÉSENT", use_container_width=True):
+                for i in range(len(df)):
+                    st.session_state[f"cb_{i}"] = True
+                st.rerun()
+                
+            if c2.button("❌ TOUT ABSENT", use_container_width=True):
+                for i in range(len(df)):
+                    st.session_state[f"cb_{i}"] = False
+                st.rerun()
+                
+            c3.markdown("<p style='text-align:center;'><a href='#bottom'>⬇️ Aller au résumé</a></p>", unsafe_allow_html=True)
+
+            st.write("---")
+
+            # --- LISTE DES ÉLÈVES ---
+            for idx, row in df.iterrows():
+                key = f"cb_{idx}"
+                # Initialisation par défaut si la clé n'existe pas
+                if key not in st.session_state:
+                    st.session_state[key] = False
+                
+                # La couleur suit strictement l'état de la session_state
+                bg = "#dcfce7" if st.session_state[key] else "#fee2e2"
+                
+                col_n, col_c = st.columns([4, 1])
+                col_n.markdown(f"""
+                    <div style='padding:12px; background:{bg}; color:black; border-radius:8px; margin-bottom:5px; border:1px solid #ccc;'>
+                        <strong>{row['Nom']} {row['Prenom']}</strong>
+                    </div>
+                """, unsafe_allow_html=True)
+                
+                # Utilisation du paramètre 'value' pour forcer l'affichage synchronisé
+                st.checkbox("P", key=key, label_visibility="collapsed")
+                df.at[idx, "Absent"] = not st.session_state[key]
+
+            # Ajout manuel
+            st.write("---")
+            with st.expander("➕ AJOUTER UN ÉLÈVE HORS PDF"):
+                with st.form("form_ajout", clear_on_submit=True):
+                    nom_m = st.text_input("Nom").upper()
+                    prenom_m = st.text_input("Prénom")
+                    if st.form_submit_button("Valider"):
+                        if nom_m and prenom_m:
+                            nouveau = {
+                                "Date": df['Date'].iloc[0], "Cours": df['Cours'].iloc[0], "Heure": df['Heure'].iloc[0],
+                                "Nom": nom_m, "Prenom": prenom_m, "Absent": False, "Manuel": True, "Session_ID": df['Session_ID'].iloc[0]
+                            }
+                            st.session_state.df_appel = pd.concat([df, pd.DataFrame([nouveau])], ignore_index=True)
+                            st.rerun()
+
+            st.markdown("<div id='bottom'></div>", unsafe_allow_html=True)
+            st.write("---")
             
-        if c2.button("❌ TOUT ABSENT", use_container_width=True):
-            for i in range(len(df)):
-                st.session_state[f"cb_{i}"] = False
-            st.rerun()
+            # Résumé
+            presents = len(df[df["Absent"] == False])
+            st.subheader("📋 Résumé")
+            r1, r2, r3 = st.columns(3)
+            r1.metric("Inscrits", len(df[df["Manuel"]==False]))
+            r2.metric("Absents", len(df[df["Absent"]==True]), delta_color="inverse")
+            r3.metric("DANS L'EAU", presents)
+
+            if st.button("💾 ENREGISTRER DÉFINITIVEMENT", type="primary", use_container_width=True):
+                save_data_to_cloud(df)
+                st.session_state.appel_termine = True
+                st.rerun()
             
-        c3.markdown("<p style='text-align:center;'><a href='#bottom'>⬇️ Aller au résumé</a></p>", unsafe_allow_html=True)
-
-        st.write("---")
-
-        # --- LISTE DES ÉLÈVES ---
-        for idx, row in df.iterrows():
-            key = f"cb_{idx}"
-            # Initialisation par défaut si la clé n'existe pas
-            if key not in st.session_state:
-                st.session_state[key] = False
-            
-            # La couleur suit strictement l'état de la session_state
-            bg = "#dcfce7" if st.session_state[key] else "#fee2e2"
-            
-            col_n, col_c = st.columns([4, 1])
-            col_n.markdown(f"""
-                <div style='padding:12px; background:{bg}; color:black; border-radius:8px; margin-bottom:5px; border:1px solid #ccc;'>
-                    <strong>{row['Nom']} {row['Prenom']}</strong>
-                </div>
-            """, unsafe_allow_html=True)
-            
-            # Utilisation du paramètre 'value' pour forcer l'affichage synchronisé
-            st.checkbox("P", key=key, label_visibility="collapsed")
-            df.at[idx, "Absent"] = not st.session_state[key]
-
-        # Ajout manuel
-        st.write("---")
-        with st.expander("➕ AJOUTER UN ÉLÈVE HORS PDF"):
-            with st.form("form_ajout", clear_on_submit=True):
-                nom_m = st.text_input("Nom").upper()
-                prenom_m = st.text_input("Prénom")
-                if st.form_submit_button("Valider"):
-                    if nom_m and prenom_m:
-                        nouveau = {
-                            "Date": df['Date'].iloc[0], "Cours": df['Cours'].iloc[0], "Heure": df['Heure'].iloc[0],
-                            "Nom": nom_m, "Prenom": prenom_m, "Absent": False, "Manuel": True, "Session_ID": df['Session_ID'].iloc[0]
-                        }
-                        st.session_state.df_appel = pd.concat([df, pd.DataFrame([nouveau])], ignore_index=True)
-                        st.rerun()
-
-        st.markdown("<div id='bottom'></div>", unsafe_allow_html=True)
-        st.write("---")
-        
-        # Résumé
-        presents = len(df[df["Absent"] == False])
-        st.subheader("📋 Résumé")
-        r1, r2, r3 = st.columns(3)
-        r1.metric("Inscrits", len(df[df["Manuel"]==False]))
-        r2.metric("Absents", len(df[df["Absent"]==True]), delta_color="inverse")
-        r3.metric("DANS L'EAU", presents)
-
-        if st.button("💾 ENREGISTRER DÉFINITIVEMENT", type="primary", use_container_width=True):
-            save_data_to_cloud(df)
-            st.session_state.appel_termine = True
-            st.rerun()
-        
-        st.markdown("<p style='text-align:center;'><a href='#top'>⬆️ Remonter en haut</a></p>", unsafe_allow_html=True)
+            st.markdown("<p style='text-align:center;'><a href='#top'>⬆️ Remonter en haut</a></p>", unsafe_allow_html=True)
 
 # =======================
 # 4. RÉCEPTION & MANAGER
@@ -185,20 +242,47 @@ def show_reception():
     st.title("💁 Réception")
     s = st.text_input("🔎 Rechercher par Nom")
     if s and not df_all.empty:
-        res = df_all[df_all["Nom"].str.contains(s, case=False, na=False) | df_all["Prenom"].str.contains(s, case=False, na=False)]
-        st.dataframe(res[["Date", "Cours", "Absent"]].sort_values("Date", ascending=False), use_container_width=True)
+        # On vérifie que les colonnes existent dans Airtable
+        cols_to_search = []
+        if "Nom" in df_all.columns: cols_to_search.append("Nom")
+        if "Prenom" in df_all.columns: cols_to_search.append("Prenom")
+        
+        if cols_to_search:
+            mask = pd.DataFrame(False, index=df_all.index, columns=['match'])
+            for col in cols_to_search:
+                mask['match'] |= df_all[col].astype(str).str.contains(s, case=False, na=False)
+            
+            res = df_all[mask['match']]
+            
+            cols_show = ["Date", "Statut"] # On adapte aux colonnes Airtable
+            if "Cours" in df_all.columns: cols_show.append("Cours")
+            
+            st.dataframe(res[cols_show].sort_values("Date", ascending=False), use_container_width=True)
+    elif df_all.empty:
+        st.info("La base de données est vide ou inaccessible.")
 
 def show_manager():
     st.title("📊 Manager")
     if st.text_input("Code confidentiel", type="password") == MANAGER_PASSWORD:
-        if df_all.empty: return
-        today = pd.Timestamp.now().normalize()
-        df_p = df_all[df_all["Absent"] == False]
-        if not df_p.empty:
-            last_v = df_p.groupby(["Nom", "Prenom"])["Date_dt"].max().reset_index()
-            last_v["Absence"] = (today - last_v["Date_dt"]).dt.days
-            st.write("🏃‍♂️ Alertes (Absent > 21 jours) :")
-            st.dataframe(last_v[last_v["Absence"] > 21].sort_values("Absence", ascending=False), use_container_width=True)
+        if df_all.empty: 
+            st.warning("Aucune donnée disponible.")
+            return
+        
+        # Adaptation pour Airtable : on cherche "Statut" au lieu de "Absent"
+        # On suppose que 'Statut' contient 'Présent' ou 'Absent'
+        if "Statut" in df_all.columns and "Date_dt" in df_all.columns:
+            today = pd.Timestamp.now().normalize()
+            
+            # On prend ceux qui sont venus (Statut = Présent)
+            df_p = df_all[df_all["Statut"] == "Présent"]
+            
+            if not df_p.empty:
+                last_v = df_p.groupby("Nom")["Date_dt"].max().reset_index()
+                last_v["Absence"] = (today - last_v["Date_dt"]).dt.days
+                st.write("🏃‍♂️ Alertes (Pas venu depuis > 21 jours) :")
+                st.dataframe(last_v[last_v["Absence"] > 21].sort_values("Absence", ascending=False), use_container_width=True)
+        else:
+            st.warning("Colonnes 'Statut' ou 'Date' manquantes dans Airtable.")
 
 # =======================
 # 5. HUB D'ACCUEIL
