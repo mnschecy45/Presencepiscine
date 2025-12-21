@@ -21,18 +21,23 @@ st.set_page_config(page_title="Piscine Pro - Gestion Cloud", layout="wide", page
 MANAGER_PASSWORD = st.secrets.get("MANAGER_PASSWORD", "manager")
 
 # --- CONNEXION AIRTABLE ---
+# --- CONNEXION AIRTABLE ET CHARGEMENT ---
 try:
     api = Api(API_TOKEN)
     table = api.table(BASE_ID, TABLE_NAME)
     
-    # On récupère toutes les données pour l'historique (Réception/Manager)
+    # On récupère TOUT (y compris les ID secrets des lignes)
     records = table.all()
+    
     if records:
-        # On transforme le format bizarre d'Airtable en tableau simple
-        data = [r['fields'] for r in records]
+        data = []
+        for r in records:
+            row = r['fields']
+            row['id'] = r['id']  # <--- C'est ça la clé magique pour modifier ensuite !
+            data.append(row)
         df_all = pd.DataFrame(data)
         
-        # Petit nettoyage des dates pour que les calculs marchent
+        # Nettoyage des dates
         if "Date" in df_all.columns:
             df_all["Date_dt"] = pd.to_datetime(df_all["Date"], errors='coerce')
     else:
