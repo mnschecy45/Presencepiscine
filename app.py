@@ -262,62 +262,213 @@ def show_reception():
         st.info("La base de données est vide ou inaccessible.")
 
 def show_manager():
+    # CSS pour cacher la barre de menu standard et faire "Pro"
+    st.markdown("""
+        <style>
+        .stMetric {
+            background-color: #0E1117;
+            border: 1px solid #303030;
+            padding: 15px;
+            border-radius: 5px;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+
     st.title("📊 Espace Manager")
     
-    # 1. Vérification du mot de passe
-    password = st.text_input("🔒 Code confidentiel", type="password")
+    # --- 1. LOGIN ---
+    password = st.sidebar.text_input("🔒 Code Manager", type="password")
+    if password != MANAGER_PASSWORD:
+        st.info("Veuillez entrer le mot de passe dans la barre latérale à gauche.")
+        return
+
+    # --- 2. PRÉPARATION DES DONNÉES ---
+    if df_all.empty:
+        st.warning("⚠️ La base de données est vide. Faites des appels pour voir les statistiques.")
+        return
+
+    # On s'assure que les dates sont bien formatées
+    df_work = df_all.copy()
+    if "Date_dt" not in df_work.columns and "Date" in df_work.columns:
+         df_work["Date_dt"] = pd.to_datetime(df_work["Date"], errors='coerce')
     
-    if password == MANAGER_PASSWORD:
-        st.success("Accès autorisé")
+    # Nettoyage des données pour éviter les bugs
+    df_work = df_work.dropna(subset=["Date_dt"])
+    
+    # --- 3. FILTRES LATÉRAUX (Comme sur votre image) ---
+    st.sidebar.header("📅 Période & Filtres")
+    
+    filtre_periode = st.sidebar.radio(
+        "Période", 
+        ["Tout l'historique", "Ce mois-ci", "Cette semaine", "Aujourd'hui"],
+        index=0
+    )
+    
+    # Logique de filtre Date
+    today = pd.Timestamp.now().normalize()
+    if filtre_periode == "Ce mois-ci":
+        start_date = today.replace(day=1)
+        df_work = df_work[df_work["Date_dt"] >= start_date]
+    elif filtre_periode == "Cette semaine":
+        start_date = today - pd.Timedelta(days=today.weekday())
+        df_work = df_work[df_work["Date_dt"] >= start_date]
+    elif filtre_periode == "Aujourd'hui":
+        df_work = df_work[df_work["Date_dt"] == today]
+
+    # Filtre Cours (si la colonne existe)
+    if "Cours" in df_work.columns:
+        liste_cours = df_work["Cours"].unique().tolist()
+        choix_cours = st.sidebar.multiselect("Filtrer par Cours", liste_cours, default=liste_cours)
+        if choix_cours:
+            df_work = df_work[df_work["Cours"].isin(choix_cours)]
+
+    # --- 4. LES ONGLETS (DASHBOARD / RISQUE / CONFIG) ---
+    tab1, tab2, tab3, tab4 = st.tabs(["📈 Dashboard", "📉 Risque Départ", "⚡ Actions", "⚙️ Config"])
+
+    # ==========================
+    # TAB 1 : DASHBOARD (VUE D'ENSEMBLE)
+    # ==========================
+    with tab1:
+        st.subheader("Vue d'ensemble")
+        
+        # Calcul des KPIs
+        nb_total = len(df_work)
+        if nb_total > 0:
+            nb_presents = len(df_work[df_work["Statut"] == "Présent"])
+            nb_absents = len(df_work[df_work["Statut"] == "Absent"])
+            taux_presence = (nb_presents / nb_total) * 100
+        else:
+            nb_presents = 0
+            nb_absents = 0
+            taux_presence = 0
+
+        # Affichage des métriques sur une ligne
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Inscrits (Période)", nb_total)
+        c2.metric("Absents", nb_absents, delta_color="inverse")
+        c3.metric("Présence", f"{taux_presence:.1f}%")
+        # Ici on pourrait mettre les "Nouveaux" si on avait la date d'inscription
+        c4.metric("Clients Uniques", df_work["Nom"].nunique())
+
         st.write("---")
 
-        if df_all.empty:
-            st.warning("⚠️ La base de données est vide pour l'instant. Faites des appels pour voir des statistiques.")
-            return
-
-        # 2. Réglage des paliers (Ce qui avait disparu)
-        st.subheader("⚙️ Réglages des alertes")
-        seuil_jours = st.slider("Alerter après combien de jours d'absence ?", min_value=7, max_value=90, value=21)
-        
-        # 3. Calcul des absences
-        # On vérifie qu'on a bien les colonnes nécessaires
-        if "Statut" in df_all.columns and "Date_dt" in df_all.columns:
-            today = pd.Timestamp.now().normalize()
-            
-            # On ne garde que les lignes où les gens étaient "Présent" pour voir leur DERNIERE venue
-            df_p = df_all[df_all["Statut"] == "Présent"].copy()
-            
-            if not df_p.empty:
-                # On cherche la date max (la plus récente) pour chaque nom
-                last_venue = df_p.groupby("Nom")["Date_dt"].max().reset_index()
-                
-                # On calcule le nombre de jours depuis cette date
-                last_venue["Jours_sans_venir"] = (today - last_venue["Date_dt"]).dt.days
-                
-                # On filtre ceux qui dépassent le seuil choisi avec le curseur
-                alertes = last_venue[last_venue["Jours_sans_venir"] >= seuil_jours].sort_values("Jours_sans_venir", ascending=False)
-                
-                # 4. Affichage des résultats
-                st.subheader(f"🚨 Élèves absents depuis + de {seuil_jours} jours")
-                
-                if not alertes.empty:
-                    # On affiche un beau tableau
-                    st.dataframe(
-                        alertes[["Nom", "Date_dt", "Jours_sans_venir"]].rename(columns={"Date_dt": "Dernière venue", "Jours_sans_venir": "Jours d'absence"}),
-                        use_container_width=True
-                    )
-                    
-                    # Petit graphique bonus
-                    st.bar_chart(alertes.set_index("Nom")["Jours_sans_venir"])
-                else:
-                    st.success(f"✅ Aucun élève n'a dépassé {seuil_jours} jours d'absence.")
-            else:
-                st.info("Pas assez de données 'Présent' pour calculer les absences.")
+        # GRAPHIQUE 1 : Évolution de la présence
+        st.subheader("Évolution de la fréquentation")
+        if not df_work.empty:
+            # On groupe par jour et on compte les présents
+            daily_counts = df_work[df_work["Statut"] == "Présent"].groupby("Date_dt").size()
+            st.bar_chart(daily_counts)
         else:
-            st.error("Les données Airtable ne contiennent pas encore de dates valides.")
+            st.info("Pas de données pour cette période.")
+
+        # TABLEAUX DÉTAILLÉS (Si les colonnes existent)
+        col_g, col_d = st.columns(2)
+        
+        with col_g:
+            st.subheader("Par Cours")
+            if "Cours" in df_work.columns:
+                stats_cours = df_work.groupby("Cours")["Statut"].apply(lambda x: (x == "Présent").mean() * 100).reset_index(name="Taux Présence %")
+                st.dataframe(stats_cours, use_container_width=True)
+            else:
+                st.caption("Ajoutez une colonne 'Cours' dans Airtable pour voir ce tableau.")
+
+        with col_d:
+            st.subheader("Top Absents (Période)")
+            top_abs = df_work[df_work["Statut"] == "Absent"]["Nom"].value_counts().head(5).reset_index()
+            top_abs.columns = ["Nom", "Nb Absences"]
+            st.dataframe(top_abs, use_container_width=True)
+
+    # ==========================
+    # TAB 2 : RISQUE DÉPART (ALERTES)
+    # ==========================
+    with tab2:
+        st.subheader("🕵️ Détection des Clients à Risque")
+        
+        # Récupération du seuil depuis la config (ou valeur par défaut)
+        seuil_jours = st.session_state.get("config_seuil", 21)
+        st.info(f"Affichage des clients n'ayant pas assisté à un cours depuis plus de **{seuil_jours} jours**.")
+
+        # Calcul des dernières venues (sur TOUTE la base, pas juste la période filtrée)
+        # On prend df_all pour avoir l'historique complet
+        df_risk = df_all.copy()
+        if "Date_dt" not in df_risk.columns:
+             df_risk["Date_dt"] = pd.to_datetime(df_risk["Date"], errors='coerce')
+        
+        df_p = df_risk[df_risk["Statut"] == "Présent"]
+        
+        if not df_p.empty:
+            last_venue = df_p.groupby("Nom")["Date_dt"].max().reset_index()
+            last_venue["Jours_Absent"] = (today - last_venue["Date_dt"]).dt.days
             
-    elif password:
-        st.error("Mot de passe incorrect.")
+            # Filtre
+            alertes = last_venue[last_venue["Jours_Absent"] >= seuil_jours].sort_values("Jours_Absent", ascending=False)
+            
+            if not alertes.empty:
+                st.dataframe(
+                    alertes.rename(columns={"Date_dt": "Dernière Venue", "Jours_Absent": "Jours d'Absence"}),
+                    use_container_width=True
+                )
+            else:
+                st.success("✅ Aucun client à risque (tous sont venus récemment).")
+        else:
+            st.warning("Pas assez de données de présence pour calculer les risques.")
+
+    # ==========================
+    # TAB 3 : ACTIONS (MESSAGES)
+    # ==========================
+    with tab3:
+        st.subheader("📧 Générateur de Messages")
+        
+        # Récupération des templates
+        objet_defaut = st.session_state.get("config_objet", "Des nouvelles de votre piscine")
+        msg_defaut = st.session_state.get("config_msg", "Bonjour {nom},\n\nCela fait un moment qu'on ne vous a pas vu. Tout va bien ?")
+
+        # Sélection du client (parmi ceux à risque identifiés dans l'onglet 2)
+        # On recalcule vite fait la liste des alertes pour le menu déroulant
+        if 'alertes' in locals() and not alertes.empty:
+            client_select = st.selectbox("Choisir un client à relancer :", alertes["Nom"].tolist())
+            
+            if client_select:
+                # Infos du client
+                info_c = alertes[alertes["Nom"] == client_select].iloc[0]
+                jours_abs = info_c["Jours_Absent"]
+                
+                st.markdown(f"**Client :** {client_select} (Absent depuis {jours_abs} jours)")
+                
+                # Génération du message
+                msg_final = msg_defaut.replace("{nom}", client_select)
+                
+                st.text_area("Copier le message :", value=msg_final, height=150)
+                
+                # Lien Mailto
+                link = f"mailto:?subject={objet_defaut}&body={msg_final.replace(chr(10), '%0D%0A')}"
+                st.markdown(f"<a href='{link}' target='_blank' style='background-color:#FF4B4B; color:white; padding:10px; border-radius:5px; text-decoration:none;'>🚀 Ouvrir mon logiciel mail</a>", unsafe_allow_html=True)
+        else:
+            st.info("Aucun client à relancer pour le moment (vérifiez l'onglet 'Risque Départ').")
+
+    # ==========================
+    # TAB 4 : CONFIGURATION
+    # ==========================
+    with tab4:
+        st.subheader("⚙️ Paramètres du Manager")
+        
+        with st.form("config_form"):
+            st.markdown("### Seuils")
+            new_seuil = st.slider("Seuil d'alerte absence (jours)", 7, 90, 21)
+            
+            st.markdown("### Messages Types")
+            new_objet = st.text_input("Objet du mail par défaut", value="Des nouvelles de votre piscine")
+            new_msg = st.text_area(
+                "Corps du message (utilisez {nom} pour le nom du client)", 
+                value="Bonjour {nom},\n\nÇa fait longtemps ! On espère vous revoir vite au bord du bassin.\n\nCordialement,"
+            )
+            
+            if st.form_submit_button("Enregistrer la configuration"):
+                st.session_state["config_seuil"] = new_seuil
+                st.session_state["config_objet"] = new_objet
+                st.session_state["config_msg"] = new_msg
+                st.success("Paramètres sauvegardés pour cette session !")
+                st.rerun()
 
 # =======================
 # 5. HUB D'ACCUEIL
