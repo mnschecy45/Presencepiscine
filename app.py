@@ -205,19 +205,23 @@ def show_reception():
                 det = "\n".join(txts)
                 msg_val = ""
                 btn_txt = f"✅ Action {lbl} Faite"
+                
+                # TEMPLATES
+                tpl_def_p1 = "Bonjour {prenom},\n\nSauf erreur de notre part, nous avons relevé les absences suivantes :\n{details}\n\nMerci de confirmer votre présence."
+                tpl_def_p3 = "Bonjour {prenom},\n\nSuite à de nombreuses absences ({details}), merci de passer à l'accueil."
+                tpl_p1 = st.session_state.get("msg_tpl", tpl_def_p1)
+                tpl_p3 = st.session_state.get("msg_p3_tpl", tpl_def_p3)
 
                 if niv == 2:
                     st.write("**Action : APPEL**")
                     st.info("Script : Bonjour, tout va bien ?")
                 elif niv == 3:
                     st.write("**Action : CONVOCATION**")
-                    tpl = st.session_state.get("msg_p3_tpl", "Bonjour {prenom}, RDV svp ({details}).")
-                    msg_val = tpl.replace("{prenom}", cli).replace("{details}", det)
+                    msg_val = tpl_p3.replace("{prenom}", cli).replace("{details}", det)
                     st.text_area("Copier :", msg_val, height=150)
                 else:
                     st.write("**Action : MAIL**")
-                    tpl = st.session_state.get("msg_tpl", "Bonjour {prenom}, absences : {details}.")
-                    msg_val = tpl.replace("{prenom}", cli).replace("{details}", det)
+                    msg_val = tpl_p1.replace("{prenom}", cli).replace("{details}", det)
                     st.text_area("Copier :", msg_val, height=150)
 
                 if st.button(btn_txt, type="primary"):
@@ -243,10 +247,9 @@ def show_reception():
 # 5. MANAGER
 # =======================
 def show_manager():
-    # CSS : CORRECTION RADICALE DU TEXTE BLANC + METRIQUES
+    # CSS FORCE NOIR
     st.markdown("""
         <style>
-        /* Force le fond des métriques en blanc/gris clair */
         [data-testid="stMetric"] {
             background-color: #f8f9fa !important;
             border: 1px solid #dee2e6 !important;
@@ -254,82 +257,79 @@ def show_manager():
             border-radius: 10px !important;
             color: black !important;
         }
-        /* Force TOUT le texte dans les métriques en NOIR */
         [data-testid="stMetric"] label { color: #333 !important; }
         [data-testid="stMetric"] div[data-testid="stMetricValue"] { color: #000 !important; }
         [data-testid="stMetric"] p { color: #000 !important; }
         </style>
     """, unsafe_allow_html=True)
-    
     st.title("📊 Manager")
 
     if st.sidebar.text_input("Mdp", type="password") != MANAGER_PASSWORD:
         st.warning("Accès refusé"); return
-    if df_all.empty:
-        st.warning("Pas de données"); return
-
+    
     # --- NETTOYAGE ---
     df_ana = df_all.copy()
-    if "Date_dt" not in df_ana.columns and "Date" in df_ana.columns:
-         df_ana["Date_dt"] = pd.to_datetime(df_ana["Date"], errors='coerce')
-    df_ana = df_ana.dropna(subset=["Date_dt"])
+    if not df_ana.empty:
+        if "Date_dt" not in df_ana.columns and "Date" in df_ana.columns:
+             df_ana["Date_dt"] = pd.to_datetime(df_ana["Date"], errors='coerce')
+        df_ana = df_ana.dropna(subset=["Date_dt"])
 
-    def clean_h(v):
-        if pd.isna(v): return "?"
-        s = str(v)
-        if len(s) > 8 and (" " in s or "T" in s):
-            try: return s.replace("T", " ").split(" ")[-1][:5]
-            except: return s
-        return s
+        def clean_h(v):
+            if pd.isna(v): return "?"
+            s = str(v)
+            if len(s) > 8 and (" " in s or "T" in s):
+                try: return s.replace("T", " ").split(" ")[-1][:5]
+                except: return s
+            return s
 
-    if "Heure" in df_ana.columns: df_ana["Heure"] = df_ana["Heure"].apply(clean_h).astype(str)
-    else: df_ana["Heure"] = "?"
+        if "Heure" in df_ana.columns: df_ana["Heure"] = df_ana["Heure"].apply(clean_h).astype(str)
+        else: df_ana["Heure"] = "?"
 
-    if "Cours" not in df_ana.columns: df_ana["Cours"] = "Inconnu"
-    df_ana["Cours"] = df_ana["Cours"].fillna("Inconnu").astype(str)
+        if "Cours" not in df_ana.columns: df_ana["Cours"] = "Inconnu"
+        df_ana["Cours"] = df_ana["Cours"].fillna("Inconnu").astype(str)
 
-    jours = {0:"Lundi", 1:"Mardi", 2:"Mercredi", 3:"Jeudi", 4:"Vendredi", 5:"Samedi", 6:"Dimanche"}
-    df_ana["Jour_Num"] = df_ana["Date_dt"].dt.dayofweek
-    df_ana["Jour"] = df_ana["Jour_Num"].map(jours).fillna("?").astype(str)
-    
-    df_ana["Annee"] = df_ana["Date_dt"].dt.year
-    df_ana["Mois"] = df_ana["Date_dt"].dt.month
-    df_ana["Semaine"] = df_ana["Date_dt"].dt.isocalendar().week
-    df_ana["Cours_Complet"] = df_ana["Cours"] + " (" + df_ana["Jour"] + " " + df_ana["Heure"] + ")"
-
-    # --- DICTIONNAIRE MOIS ---
-    mois_map = {
-        1: "Janvier", 2: "Février", 3: "Mars", 4: "Avril", 5: "Mai", 6: "Juin",
-        7: "Juillet", 8: "Août", 9: "Septembre", 10: "Octobre", 11: "Novembre", 12: "Décembre"
-    }
-
-    # --- FILTRES ---
-    st.sidebar.header("📅 Filtres")
-    yrs = sorted(df_ana["Annee"].unique(), reverse=True)
-    yr = st.sidebar.selectbox("Année", yrs)
-    df_yr = df_ana[df_ana["Annee"] == yr]
-
-    vue = st.sidebar.radio("Vue", ["Mois", "Semaine"])
-    if vue == "Mois":
-        mths_nums = sorted(df_yr["Mois"].unique())
-        mths_names = ["TOUS"] + [mois_map.get(m, str(m)) for m in mths_nums]
-        ms = st.sidebar.selectbox("Mois", mths_names)
+        jours = {0:"Lundi", 1:"Mardi", 2:"Mercredi", 3:"Jeudi", 4:"Vendredi", 5:"Samedi", 6:"Dimanche"}
+        df_ana["Jour_Num"] = df_ana["Date_dt"].dt.dayofweek
+        df_ana["Jour"] = df_ana["Jour_Num"].map(jours).fillna("?").astype(str)
         
-        if ms == "TOUS": df_filt = df_yr.copy()
-        else:
-            # On retrouve le numéro du mois par son nom
-            choix_num = [k for k, v in mois_map.items() if v == ms][0]
-            df_filt = df_yr[df_yr["Mois"] == choix_num].copy()
-    else:
-        sems = sorted(df_yr["Semaine"].unique())
-        sl = [f"Semaine {s}" for s in sems]
-        ss = st.sidebar.selectbox("Semaine", sl)
-        df_filt = df_yr[df_yr["Semaine"] == int(ss.split()[1])].copy()
+        df_ana["Annee"] = df_ana["Date_dt"].dt.year
+        df_ana["Mois"] = df_ana["Date_dt"].dt.month
+        df_ana["Semaine"] = df_ana["Date_dt"].dt.isocalendar().week
+        df_ana["Cours_Complet"] = df_ana["Cours"] + " (" + df_ana["Jour"] + " " + df_ana["Heure"] + ")"
+
+    # --- MOIS DICT ---
+    mois_map = {1: "Janvier", 2: "Février", 3: "Mars", 4: "Avril", 5: "Mai", 6: "Juin",
+        7: "Juillet", 8: "Août", 9: "Septembre", 10: "Octobre", 11: "Novembre", 12: "Décembre"}
 
     # --- TABS ---
-    t_dash, t_comp, t_conf = st.tabs(["📊 DASHBOARD", "🚀 ANALYSE", "⚙️ CONFIG"])
+    t_dash, t_comp, t_conf, t_maint = st.tabs(["📊 DASHBOARD", "🚀 ANALYSE", "⚙️ CONFIG", "🛠️ MAINTENANCE"])
 
+    # ----------------------------------------------------
+    # TAB 1 : DASHBOARD
+    # ----------------------------------------------------
     with t_dash:
+        if df_ana.empty: st.warning("Pas de données"); st.stop()
+        
+        st.sidebar.header("📅 Filtres")
+        yrs = sorted(df_ana["Annee"].unique(), reverse=True)
+        yr = st.sidebar.selectbox("Année", yrs)
+        df_yr = df_ana[df_ana["Annee"] == yr]
+
+        vue = st.sidebar.radio("Vue", ["Mois", "Semaine"])
+        if vue == "Mois":
+            mths_nums = sorted(df_yr["Mois"].unique())
+            mths_names = ["TOUS"] + [mois_map.get(m, str(m)) for m in mths_nums]
+            ms = st.sidebar.selectbox("Mois", mths_names)
+            if ms == "TOUS": df_filt = df_yr.copy()
+            else:
+                choix_num = [k for k, v in mois_map.items() if v == ms][0]
+                df_filt = df_yr[df_yr["Mois"] == choix_num].copy()
+        else:
+            sems = sorted(df_yr["Semaine"].unique())
+            sl = [f"Semaine {s}" for s in sems]
+            ss = st.sidebar.selectbox("Semaine", sl)
+            df_filt = df_yr[df_yr["Semaine"] == int(ss.split()[1])].copy()
+
         tot = len(df_filt)
         pres = len(df_filt[df_filt["Statut"]=="Présent"])
         absent = len(df_filt[df_filt["Statut"]=="Absent"])
@@ -340,11 +340,9 @@ def show_manager():
         c3.metric("Absents", absent, delta_color="inverse")
         
         st.divider()
-        st.subheader("📈 Fréquentation (Évolution)")
+        st.subheader("📈 Fréquentation")
         if not df_filt.empty:
-            # CORRECTION DATE FRANCAISE (FINI TUE/WED)
             da = df_filt[df_filt["Statut"]=="Présent"].groupby("Date_dt").size()
-            # On transforme l'index (les dates) en texte "JJ/MM"
             da.index = da.index.strftime("%d/%m")
             st.area_chart(da, color="#3b82f6")
         
@@ -392,12 +390,16 @@ def show_manager():
                 tp = df_filt[df_filt["Statut"]=="Présent"]["Nom"].value_counts().head(10).reset_index(name="Pres")
                 st.dataframe(tp, use_container_width=True, hide_index=True)
 
+    # ----------------------------------------------------
+    # TAB 2 : ANALYSE
+    # ----------------------------------------------------
     with t_comp:
-        st.info("📊 Suivez la tendance de vos cours.")
-        ct1, ct2 = st.tabs(["📉 Évolution d'un Cours", "🆚 Comparateur Périodes"])
+        if df_ana.empty: st.warning("Pas de données"); st.stop()
+        
+        st.info("📊 Suivez la tendance.")
+        ct1, ct2 = st.tabs(["📉 Évolution Cours", "🆚 Comparateur Périodes"])
         
         with ct1:
-            st.markdown("Voir si un cours se remplit ou se vide au fil du temps.")
             liste_cours = sorted([str(c) for c in df_ana["Cours_Complet"].unique() if str(c) != "nan" and str(c) != "Inconnu"])
             c_choix = st.selectbox("Choisir un cours :", liste_cours)
             if c_choix:
@@ -405,7 +407,6 @@ def show_manager():
                 st.line_chart(sub_c)
         
         with ct2:
-            st.write("Comparer les résultats entre deux périodes.")
             if vue == "Semaine":
                 l_s = sorted(df_ana["Semaine"].unique())
                 sa = st.selectbox("Sem A", l_s, index=0)
@@ -415,23 +416,21 @@ def show_manager():
             else:
                 l_m_nums = sorted(df_ana["Mois"].unique())
                 l_m_names = [mois_map.get(m, str(m)) for m in l_m_nums]
-                
                 ma_txt = st.selectbox("Mois A", l_m_names, index=0)
                 mb_txt = st.selectbox("Mois B", l_m_names, index=len(l_m_names)-1 if len(l_m_names)>0 else 0)
-                
-                # Retrouver l'ID du mois
                 ma_num = [k for k, v in mois_map.items() if v == ma_txt][0]
                 mb_num = [k for k, v in mois_map.items() if v == mb_txt][0]
-                
                 da = df_ana[df_ana["Mois"]==ma_num]; db = df_ana[df_ana["Mois"]==mb_num]
                 la = f"{ma_txt}"; lb = f"{mb_txt}"
             
             pa = len(da[da["Statut"]=="Présent"]); pb = len(db[db["Statut"]=="Présent"])
-            
             c1, c2 = st.columns(2)
             c1.metric(f"Présents {la}", pa)
             c2.metric(f"Présents {lb}", pb, delta=pb-pa)
 
+    # ----------------------------------------------------
+    # TAB 3 : CONFIG
+    # ----------------------------------------------------
     with t_conf:
         st.header("⚙️ Config")
         c_s, c_m = st.columns(2)
@@ -445,9 +444,93 @@ def show_manager():
             st.text_input("Label P3", key="p3_label", value="RDV")
         with c_m:
             st.subheader("Messages")
-            st.text_area("Msg P1", key="msg_tpl", value="Bonjour...", height=150)
-            st.text_area("Msg P3", key="msg_p3_tpl", value="Convocation...", height=150)
+            tpl_def_p1 = "Bonjour {prenom},\n\nSauf erreur de notre part, nous avons relevé les absences suivantes :\n{details}\n\nMerci de confirmer votre présence."
+            tpl_def_p3 = "Bonjour {prenom},\n\nSuite à de nombreuses absences ({details}), merci de passer à l'accueil."
+            st.text_area("Msg P1", key="msg_tpl", value=tpl_def_p1, height=150)
+            st.text_area("Msg P3", key="msg_p3_tpl", value=tpl_def_p3, height=150)
+        
         if st.button("Sauvegarder"): st.success("OK")
+
+    # ----------------------------------------------------
+    # TAB 4 : MAINTENANCE (IMPORT CUSTOM)
+    # ----------------------------------------------------
+    with t_maint:
+        st.header("🛠️ Maintenance")
+        st.warning("Attention : Actions irréversibles.")
+        
+        col_import, col_reset = st.columns(2)
+        
+        with col_import:
+            st.subheader("📥 Importer CSV Ancien")
+            st.info("Format spécifique : nom, prenom, heure_debut, absent...")
+            up_csv = st.file_uploader("Fichier CSV", type=["csv"])
+            
+            if up_csv:
+                if st.button("Lancer Import"):
+                    try:
+                        df_csv = pd.read_csv(up_csv)
+                        # On met tout en minuscule pour être sûr
+                        df_csv.columns = [c.lower() for c in df_csv.columns]
+                        
+                        prog = st.progress(0)
+                        tot = len(df_csv)
+                        
+                        for i, row in df_csv.iterrows():
+                            # 1. On recolle Nom + Prénom
+                            nom_brut = str(row.get('nom', '')).upper()
+                            prenom_brut = str(row.get('prenom', ''))
+                            nom_complet = f"{nom_brut} {prenom_brut}".strip()
+                            if not nom_complet: nom_complet = "Inconnu"
+
+                            # 2. Date
+                            date_val = str(row.get('date', str(date.today())))
+                            
+                            # 3. Heure (heure_debut -> Heure)
+                            heure_val = str(row.get('heure_debut', '00h00'))
+                            
+                            # 4. Cours
+                            cours_val = str(row.get('cours', 'Inconnu'))
+                            
+                            # 5. Statut (absent = True/False)
+                            is_absent = str(row.get('absent', '')).lower() == 'true'
+                            statut_val = "Absent" if is_absent else "Présent"
+
+                            rec = {
+                                "Nom": nom_complet,
+                                "Statut": statut_val,
+                                "Date": date_val,
+                                "Cours": cours_val,
+                                "Heure": heure_val,
+                                "Traite": True # On archive direct
+                            }
+                            table.create(rec)
+                            prog.progress((i + 1) / tot)
+                        
+                        prog.empty()
+                        st.success("✅ Import réussi !")
+                        st.balloons()
+                        
+                    except Exception as e:
+                        st.error(f"Erreur import : {e}")
+
+        with col_reset:
+            st.subheader("🗑️ Reset Total")
+            if st.checkbox("Confirmer suppression totale"):
+                if st.button("🔥 TOUT VIDER", type="primary"):
+                    try:
+                        ids = [r['id'] for r in table.all()]
+                        if not ids: st.info("Déjà vide.")
+                        else:
+                            prog = st.progress(0)
+                            bs = 10
+                            for i in range(0, len(ids), bs):
+                                batch = ids[i:i + bs]
+                                table.batch_delete(batch)
+                                prog.progress(min((i + bs) / len(ids), 1.0))
+                            prog.empty()
+                            st.success("Base vidée.")
+                            st.rerun()
+                    except Exception as e: st.error(f"Erreur : {e}")
 
 # =======================
 # 6. ROUTER
