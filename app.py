@@ -25,64 +25,50 @@ try:
     api = Api(API_TOKEN)
     table = api.table(BASE_ID, TABLE_NAME)
     
-    # On récupère TOUT (y compris les ID pour pouvoir modifier les lignes)
     records = table.all()
     
     if records:
         data = []
         for r in records:
             row = r['fields']
-            row['id'] = r['id']  # On garde l'ID pour la Réception
+            row['id'] = r['id']
             data.append(row)
         df_all = pd.DataFrame(data)
         
-        # Nettoyage des dates
         if "Date" in df_all.columns:
             df_all["Date_dt"] = pd.to_datetime(df_all["Date"], errors='coerce')
     else:
         df_all = pd.DataFrame()
 except Exception as e:
-    st.error(f"Erreur de connexion Airtable (Vérifiez vos clés) : {e}")
+    st.error(f"Erreur de connexion Airtable : {e}")
     df_all = pd.DataFrame()
 
 # =======================
-# 2. FONCTIONS UTILES (Sauvegarde & PDF)
+# 2. FONCTIONS UTILES
 # =======================
 def save_data_to_cloud(df_new):
-    """ Envoie les nouvelles présences vers Airtable """
     progress_bar = st.progress(0)
     total = len(df_new)
-    
     for i, row in df_new.iterrows():
         try:
             statut_final = "Absent" if row["Absent"] else "Présent"
-            
-            # Date format texte YYYY-MM-DD
-            if isinstance(row["Date"], (date, datetime)):
-                date_str = row["Date"].strftime("%Y-%m-%d")
-            else:
-                date_str = str(row["Date"])
-
+            date_str = row["Date"].strftime("%Y-%m-%d") if isinstance(row["Date"], (date, datetime)) else str(row["Date"])
             record = {
                 "Nom": row["Nom"],
                 "Statut": statut_final, 
                 "Date": date_str,
                 "Cours": row["Cours"],
                 "Heure": row["Heure"],
-                "Traite": False # Par défaut, ce n'est pas traité
+                "Traite": False
             }
-            
             table.create(record)
             progress_bar.progress((i + 1) / total)
-            
         except Exception as e:
-            st.error(f"Erreur envoi ligne {i}: {e}")
-
+            st.error(f"Erreur : {e}")
     progress_bar.empty()
     st.toast("Sauvegarde terminée !", icon="☁️")
 
 def parse_pdf_complete(file_bytes):
-    """ Lit le PDF et extrait les noms, cours et heures """
     rows = []
     ignore = ["TCPDF", "www.", "places", "réservées", "disponibles", "ouvertes", "le ", " à ", "Page ", "Généré"]
     try:
@@ -91,15 +77,11 @@ def parse_pdf_complete(file_bytes):
                 txt = page.extract_text()
                 if not txt: continue
                 lines = txt.splitlines()
-                
-                # 1. Trouver la date
                 d_str = ""
                 for l in lines[:15]:
                     m = re.search(r"\d{2}/\d{2}/\d{4}", l)
                     if m: d_str = m.group(0); break
                 s_date = datetime.strptime(d_str, "%d/%m/%Y").date() if d_str else date.today()
-                
-                # 2. Trouver Cours et Heure
                 c_name, h_deb = "Cours Inconnu", "00h00"
                 for l in lines[:15]:
                     ts = re.findall(r"\d{1,2}h\d{2}", l)
@@ -107,12 +89,9 @@ def parse_pdf_complete(file_bytes):
                         h_deb = ts[0]
                         c_name = l[:l.index(ts[0])].strip()
                         break
-                
-                # 3. Trouver les Noms
                 start_index = 0
                 for i, l in enumerate(lines):
                     if "N° réservation" in l: start_index = i + 1; break
-                
                 for l in lines[start_index:]:
                     if not l.strip() or any(x in l for x in ignore): continue
                     l_clean = re.sub(r'\d+', '', l).strip()
@@ -127,11 +106,10 @@ def parse_pdf_complete(file_bytes):
     return pd.DataFrame(rows)
 
 # =======================
-# 3. INTERFACE MAÎTRE-NAGEUR
+# 3. MAÎTRE-NAGEUR
 # =======================
 def show_maitre_nageur():
     st.title("👨‍🏫 Appel Bassin")
-    
     if st.session_state.get("appel_termine", False):
         st.success("✅ Appel enregistré !")
         if st.button("Nouvel appel"):
@@ -142,20 +120,17 @@ def show_maitre_nageur():
         return
 
     up = st.file_uploader("Charger PDF", type=["pdf"])
-    
     if up:
         if 'current_file' not in st.session_state or st.session_state.current_file != up.name:
             st.session_state.current_file = up.name
             st.session_state.df_appel = parse_pdf_complete(up.read())
 
         df = st.session_state.df_appel
-        
         if not df.empty:
             d_obj = df['Date'].iloc[0]
-            date_str = d_obj.strftime('%d/%m/%Y') if isinstance(d_obj, (date, datetime)) else str(d_obj)
-            st.info(f"📅 **{date_str}** | {df['Cours'].iloc[0]} ({df['Heure'].iloc[0]})")
+            d_aff = d_obj.strftime('%d/%m/%Y') if isinstance(d_obj, (date, datetime)) else str(d_obj)
+            st.info(f"📅 **{d_aff}** | {df['Cours'].iloc[0]} ({df['Heure'].iloc[0]})")
 
-            # Actions rapides
             c1, c2 = st.columns(2)
             if c1.button("✅ TOUT PRÉSENT"):
                 for i in range(len(df)): st.session_state[f"cb_{i}"] = True
@@ -163,14 +138,11 @@ def show_maitre_nageur():
             if c2.button("❌ TOUT ABSENT"):
                 for i in range(len(df)): st.session_state[f"cb_{i}"] = False
                 st.rerun()
-
+            
             st.write("---")
-
-            # Liste Élèves
             for idx, row in df.iterrows():
                 key = f"cb_{idx}"
                 if key not in st.session_state: st.session_state[key] = False
-                
                 bg = "#dcfce7" if st.session_state[key] else "#fee2e2"
                 col_n, col_c = st.columns([4, 1])
                 col_n.markdown(f"<div style='padding:10px; background:{bg}; border-radius:5px;'><b>{row['Nom']} {row['Prenom']}</b></div>", unsafe_allow_html=True)
@@ -178,138 +150,111 @@ def show_maitre_nageur():
                 df.at[idx, "Absent"] = not st.session_state[key]
 
             st.write("---")
-            
-            # Ajout Manuel
             with st.expander("➕ Ajouter un client manuellement"):
-                with st.form("add_manual"):
-                    nom_m = st.text_input("Nom Client").upper()
+                with st.form("add_m"):
+                    nom_m = st.text_input("Nom").upper()
                     if st.form_submit_button("Ajouter"):
-                        new_row = df.iloc[0].copy()
-                        new_row["Nom"] = nom_m
-                        new_row["Prenom"] = "(Manuel)"
-                        new_row["Manuel"] = True
-                        new_row["Absent"] = False
-                        st.session_state.df_appel = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+                        nr = df.iloc[0].copy()
+                        nr["Nom"] = nom_m
+                        nr["Prenom"] = "(Manuel)"
+                        nr["Manuel"] = True
+                        nr["Absent"] = False
+                        st.session_state.df_appel = pd.concat([df, pd.DataFrame([nr])], ignore_index=True)
                         st.rerun()
 
-            # Validation Finale
-            nb_presents = len(df[df["Absent"]==False])
-            st.metric("Clients dans l'eau", nb_presents)
-            
-            if st.button("💾 ENREGISTRER DÉFINITIVEMENT", type="primary"):
+            st.metric("Clients dans l'eau", len(df[df["Absent"]==False]))
+            if st.button("💾 ENREGISTRER", type="primary"):
                 save_data_to_cloud(df)
                 st.session_state.appel_termine = True
                 st.rerun()
 
 # =======================
-# 4. INTERFACE RÉCEPTION (CRM)
+# 4. RÉCEPTION
 # =======================
 def show_reception():
-    st.title("💁 Réception - Gestion Clients")
+    st.title("💁 Réception")
+    if df_all.empty: return
 
-    if df_all.empty:
-        st.warning("Chargement des données...")
-        return
-
-    # Prépa données
     df_work = df_all.copy()
     if "Date_dt" not in df_work.columns and "Date" in df_work.columns:
          df_work["Date_dt"] = pd.to_datetime(df_work["Date"], errors='coerce')
     if "Traite" not in df_work.columns: df_work["Traite"] = False
 
-    tab_todo, tab_hist = st.tabs(["⚡ À TRAITER", "✅ HISTORIQUE"])
+    tab1, tab2 = st.tabs(["⚡ À TRAITER", "✅ HISTORIQUE"])
 
-    # --- A TRAITER ---
-    with tab_todo:
-        # Filtre : Absent ET Pas Traité
+    with tab1:
         df_todo = df_work[(df_work["Statut"] == "Absent") & (df_work["Traite"] != True)]
-        
         if df_todo.empty:
-            st.success("🎉 Rien à faire ! Tout est à jour.")
+            st.success("Tout est à jour !")
         else:
             st.write(f"**{len(df_todo)} absences** en attente.")
-            client_select = st.selectbox("Sélectionner un client", df_todo["Nom"].unique())
-            
-            if client_select:
-                # 1. Calcul Niveau (Sur historique complet)
-                all_abs = df_work[(df_work["Nom"] == client_select) & (df_work["Statut"] == "Absent")]
-                nb_total = len(all_abs)
+            client = st.selectbox("Client", df_todo["Nom"].unique())
+            if client:
+                all_abs = df_work[(df_work["Nom"] == client) & (df_work["Statut"] == "Absent")]
+                nb = len(all_abs)
                 
                 s1 = st.session_state.get("p1_val", 1)
                 s2 = st.session_state.get("p2_val", 3)
                 s3 = st.session_state.get("p3_val", 5)
                 
-                niveau = 1
-                if nb_total >= s3: niveau = 3
-                elif nb_total >= s2: niveau = 2
+                niv = 1
+                if nb >= s3: niv = 3
+                elif nb >= s2: niv = 2
                 
-                # Alertes visuelles
-                if niveau == 3: st.error(f"🔴 NIVEAU 3 - CONVOCATION ({nb_total} absences)")
-                elif niveau == 2: st.warning(f"🟠 NIVEAU 2 - APPEL ({nb_total} absences)")
-                else: st.info(f"🟡 NIVEAU 1 - MAIL ({nb_total} absences)")
+                if niv == 3: st.error(f"🔴 NIVEAU 3 ({nb} abs)")
+                elif niv == 2: st.warning(f"🟠 NIVEAU 2 ({nb} abs)")
+                else: st.info(f"🟡 NIVEAU 1 ({nb} abs)")
 
-                # 2. Détails (seulement les non traités)
-                to_process = df_todo[df_todo["Nom"] == client_select].sort_values("Date_dt", ascending=False)
-                ids_a_traiter = []
-                txt_list = []
+                to_process = df_todo[df_todo["Nom"] == client].sort_values("Date_dt", ascending=False)
+                ids_todo = []
+                txt = []
+                for _, r in to_process.iterrows():
+                    ids_todo.append(r['id'])
+                    d = r["Date_dt"].strftime("%d/%m") if pd.notnull(r["Date_dt"]) else "?"
+                    c = r.get("Cours", "Séance")
+                    txt.append(f"- {c} le {d}")
                 
-                for _, row in to_process.iterrows():
-                    ids_a_traiter.append(row['id'])
-                    d = row["Date_dt"].strftime("%d/%m") if pd.notnull(row["Date_dt"]) else "?"
-                    c = row.get("Cours", "Séance")
-                    txt_list.append(f"- {c} le {d}")
-                
-                details_str = "\n".join(txt_list)
-
-                # 3. Action
-                msg_final = ""
-                label_btn = "✅ Traité"
-                
-                if niveau == 2:
-                    st.markdown("### 📞 Action : Appeler")
-                    st.write("*Script : Bonjour, nous avons noté plusieurs absences. Tout va bien ?*")
-                    label_btn = "✅ J'ai appelé le client"
-                elif niveau == 3:
-                    st.markdown("### ✉️ Action : Convocation")
+                msg = ""
+                lbl = "Traité"
+                if niv == 2:
+                    st.write("**Action : APPEL TÉLÉPHONIQUE**")
+                    lbl = "✅ J'ai appelé"
+                elif niv == 3:
+                    st.write("**Action : CONVOCATION**")
                     tpl = st.session_state.get("msg_p3_tpl", "Bonjour {prenom}, RDV nécessaire ({details}).")
-                    msg_final = tpl.replace("{prenom}", client_select).replace("{details}", details_str)
-                    st.text_area("Copier :", value=msg_final, height=150)
-                    label_btn = "✅ Convocation envoyée"
+                    msg = tpl.replace("{prenom}", client).replace("{details}", "\n".join(txt))
+                    st.text_area("Copier :", value=msg, height=150)
+                    lbl = "✅ Convocation envoyée"
                 else:
-                    st.markdown("### 📧 Action : Mail")
+                    st.write("**Action : MAIL**")
                     tpl = st.session_state.get("msg_tpl", "Bonjour {prenom}, absences : {details}.")
-                    msg_final = tpl.replace("{prenom}", client_select).replace("{details}", details_str)
-                    st.text_area("Copier :", value=msg_final, height=150)
-                    label_btn = "✅ Mail envoyé"
+                    msg = tpl.replace("{prenom}", client).replace("{details}", "\n".join(txt))
+                    st.text_area("Copier :", value=msg, height=150)
+                    lbl = "✅ Mail envoyé"
 
-                if st.button(label_btn, type="primary"):
-                    prog = st.progress(0)
+                if st.button(lbl, type="primary"):
                     now = datetime.now().strftime("%Y-%m-%d %H:%M")
-                    for idx, pid in enumerate(ids_a_traiter):
-                        try:
-                            table.update(pid, {"Traite": True, "Date_Traitement": now})
-                            prog.progress((idx+1)/len(ids_a_traiter))
+                    for pid in ids_todo:
+                        try: table.update(pid, {"Traite": True, "Date_Traitement": now})
                         except: pass
-                    st.success(f"Dossier {client_select} archivé !")
+                    st.success("Archivé !")
                     st.rerun()
 
-    # --- HISTORIQUE ---
-    with tab_hist:
-        df_done = df_work[(df_work["Statut"] == "Absent") & (df_work["Traite"] == True)].copy()
+    with tab2:
+        df_done = df_work[(df_work["Statut"] == "Absent") & (df_work["Traite"] == True)]
         if not df_done.empty:
             cols = ["Nom", "Date", "Cours"]
             if "Date_Traitement" in df_done.columns:
                 cols.append("Date_Traitement")
-                df_done.sort_values("Date_Traitement", ascending=False, inplace=True)
+                df_done = df_done.sort_values("Date_Traitement", ascending=False)
             st.dataframe(df_done[cols], use_container_width=True)
         else:
-            st.info("Vide.")
+            st.info("Vide")
 
 # =======================
-# 5. INTERFACE MANAGER (Analytique)
+# 5. MANAGER (CORRIGÉ & COMPLET)
 # =======================
 def show_manager():
-    # Style Clair
     st.markdown("""
         <style>
         .stMetric { background-color: #f8f9fa; border: 1px solid #dee2e6; padding: 15px; border-radius: 10px; color: #31333F; }
@@ -320,20 +265,20 @@ def show_manager():
 
     st.title("📊 Manager - Pilotage")
 
-    if st.sidebar.text_input("Mot de passe", type="password") != MANAGER_PASSWORD:
-        st.info("Identifiez-vous à gauche (Menu >).")
+    if st.sidebar.text_input("Code Manager", type="password") != MANAGER_PASSWORD:
+        st.info("Identifiez-vous à gauche.")
         return
 
     if df_all.empty:
         st.warning("Aucune donnée.")
         return
 
-    # Prépa
+    # --- PRÉPARATION ---
     df_ana = df_all.copy()
     if "Date_dt" not in df_ana.columns and "Date" in df_ana.columns:
          df_ana["Date_dt"] = pd.to_datetime(df_ana["Date"], errors='coerce')
     df_ana = df_ana.dropna(subset=["Date_dt"])
-    
+
     # Nettoyage Heure
     def clean_h(v):
         s = str(v)
@@ -353,8 +298,8 @@ def show_manager():
     df_ana["Jour"] = df_ana["Date_dt"].dt.dayofweek.map(jours)
     df_ana["Jour_Num"] = df_ana["Date_dt"].dt.dayofweek
 
-    # Filtres
-    st.sidebar.header("📅 Filtres")
+    # --- FILTRES ---
+    st.sidebar.header("📅 Période")
     yrs = sorted(df_ana["Annee"].unique(), reverse=True)
     yr = st.sidebar.selectbox("Année", yrs)
     df_yr = df_ana[df_ana["Annee"] == yr]
@@ -363,13 +308,18 @@ def show_manager():
     m_list = ["TOUS"] + [pd.to_datetime(f"2022-{m}-01").strftime("%B") for m in mths]
     m_sel = st.sidebar.selectbox("Mois", m_list)
     
-    if m_sel == "TOUS": df_filt = df_yr
+    if m_sel == "TOUS": df_filt = df_yr.copy()
     else:
         m_idx = mths[m_list.index(m_sel)-1]
-        df_filt = df_yr[df_yr["Mois"] == m_idx]
+        df_filt = df_yr[df_yr["Mois"] == m_idx].copy()
 
-    # Dashboard
-    tab1, tab2 = st.tabs(["📊 STATS", "⚙️ CONFIG"])
+    # --- CRÉATION DE L'ÉTIQUETTE INTELLIGENTE (COURS + JOUR + HEURE) ---
+    # Pour différencier le cours du Lundi de celui du Mercredi
+    # Exemple résultat : "Aquafitness (Lundi 12h15)"
+    df_filt["Cours_Complet"] = df_filt["Cours"] + " (" + df_filt["Jour"] + " " + df_filt["Heure"] + ")"
+
+    # --- DASHBOARD ---
+    tab1, tab2 = st.tabs(["📊 STATISTIQUES", "⚙️ CONFIGURATION"])
     
     with tab1:
         tot = len(df_filt)
@@ -377,7 +327,6 @@ def show_manager():
         absent = len(df_filt[df_filt["Statut"]=="Absent"])
         taux = (pres/tot*100) if tot>0 else 0
         
-        # 1. METRIQUES
         c1, c2, c3 = st.columns(3)
         c1.metric("Inscrits", tot)
         c2.metric("Présents", pres, f"{taux:.1f}%")
@@ -385,16 +334,37 @@ def show_manager():
         
         st.write("---")
         
-        # 2. GRAPHIQUE D'EVOLUTION (NOUVEAU)
+        # 1. GRAPH EVOLUTION (FRANCAIS)
         st.subheader("📈 Évolution de la Fréquentation")
         if not df_filt.empty:
             daily = df_filt[df_filt["Statut"] == "Présent"].groupby("Date_dt").size()
             st.area_chart(daily, color="#3b82f6")
         
         st.write("---")
+
+        # 2. TOP COURS (DETAILLES) & SEMAINE
+        c_g1, c_g2 = st.columns(2)
+        with c_g1:
+            st.subheader("🔥 Top Cours (Les plus fréquentés)")
+            if not df_filt.empty:
+                # On utilise la colonne intelligente créée plus haut
+                # On compte les présents uniquement pour le succès
+                top_data = df_filt[df_filt["Statut"]=="Présent"]["Cours_Complet"].value_counts().head(10)
+                st.bar_chart(top_data)
         
-        # 3. DETAILS PAR CRENEAU
-        st.subheader("Détails par Créneau")
+        with c_g2:
+            st.subheader("📅 Affluence par Jour")
+            if not df_filt.empty:
+                # Tri forcé Lundi -> Dimanche
+                sem = df_filt[df_filt["Statut"]=="Présent"].groupby("Jour").size()
+                ordre = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
+                sem = sem.reindex(ordre, fill_value=0)
+                st.bar_chart(sem, color="#76b900")
+        
+        st.write("---")
+
+        # 3. TABLEAU DETAILLE
+        st.subheader("📋 Détails par Créneau")
         if not df_filt.empty:
             synt = df_filt.groupby(["Jour_Num", "Jour", "Heure", "Cours"]).agg(
                 Inscrits=('Nom', 'count'),
@@ -403,55 +373,40 @@ def show_manager():
             synt["Taux %"] = (synt["Presents"]/synt["Inscrits"]*100).round(1)
             synt.sort_values(["Jour_Num", "Heure"], inplace=True)
             st.dataframe(synt[["Jour", "Heure", "Cours", "Inscrits", "Presents", "Taux %"]], use_container_width=True, hide_index=True)
-        
+
         st.write("---")
 
-        # 4. LES TOPS (RETABLIS)
+        # 4. LES TOPS CLIENTS
         c_top1, c_top2 = st.columns(2)
         with c_top1:
             st.subheader("🚨 Top 10 Absents")
             if not df_filt.empty:
                 top_abs = df_filt[df_filt["Statut"]=="Absent"]["Nom"].value_counts().head(10).reset_index()
-                top_abs.columns = ["Nom", "Nb"]
+                top_abs.columns = ["Nom", "Nb Absences"]
                 st.dataframe(top_abs, use_container_width=True, hide_index=True)
 
         with c_top2:
             st.subheader("🏆 Top 10 Assidus")
             if not df_filt.empty:
                 top_pres = df_filt[df_filt["Statut"]=="Présent"]["Nom"].value_counts().head(10).reset_index()
-                top_pres.columns = ["Nom", "Nb"]
+                top_pres.columns = ["Nom", "Nb Présences"]
                 st.dataframe(top_pres, use_container_width=True, hide_index=True)
-
-        st.write("---")
-
-        # 5. GRAPHIQUES SUITE
-        c_g1, c_g2 = st.columns(2)
-        with c_g1:
-            st.subheader("Top Cours")
-            if not df_filt.empty: st.bar_chart(df_filt["Cours"].value_counts())
-        with c_g2:
-            st.subheader("Semaine")
-            if not df_filt.empty:
-                sem = df_filt.groupby("Jour").size()
-                ordre = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
-                sem = sem.reindex(ordre, fill_value=0)
-                st.bar_chart(sem, color="#76b900")
 
     with tab2:
         c_s, c_m = st.columns(2)
         with c_s:
-            st.subheader("Seuils P1 / P2 / P3")
-            st.number_input("Seuil P1", key="p1_val", value=1)
-            st.number_input("Seuil P2", key="p2_val", value=3)
-            st.number_input("Seuil P3", key="p3_val", value=5)
+            st.subheader("Seuils Alertes")
+            st.number_input("P1", key="p1_val", value=1)
+            st.number_input("P2", key="p2_val", value=3)
+            st.number_input("P3", key="p3_val", value=5)
         with c_m:
             st.subheader("Messages")
-            st.text_area("Message P1", key="msg_tpl", value="Bonjour...", height=100)
-            st.text_area("Message P3", key="msg_p3_tpl", value="Convocation...", height=100)
-            if st.button("Sauvegarder la configuration"): st.success("OK")
+            st.text_area("P1", key="msg_tpl", value="Bonjour...", height=100)
+            st.text_area("P3", key="msg_p3_tpl", value="Convocation...", height=100)
+            if st.button("Sauvegarder"): st.success("OK")
 
 # =======================
-# 6. NAVIGATION PRINCIPALE
+# 6. NAVIGATION
 # =======================
 if 'page' not in st.session_state: st.session_state.page = "HUB"
 
