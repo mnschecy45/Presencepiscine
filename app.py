@@ -377,13 +377,23 @@ def show_manager():
         absent = len(df_filt[df_filt["Statut"]=="Absent"])
         taux = (pres/tot*100) if tot>0 else 0
         
-        c1, c2, c3, c4 = st.columns(4)
+        # 1. METRIQUES
+        c1, c2, c3 = st.columns(3)
         c1.metric("Inscrits", tot)
         c2.metric("Présents", pres, f"{taux:.1f}%")
         c3.metric("Absents", absent, delta_color="inverse")
-        c4.metric("CA Estimé", f"{pres * 15} €")
         
         st.write("---")
+        
+        # 2. GRAPHIQUE D'EVOLUTION (NOUVEAU)
+        st.subheader("📈 Évolution de la Fréquentation")
+        if not df_filt.empty:
+            daily = df_filt[df_filt["Statut"] == "Présent"].groupby("Date_dt").size()
+            st.area_chart(daily, color="#3b82f6")
+        
+        st.write("---")
+        
+        # 3. DETAILS PAR CRENEAU
         st.subheader("Détails par Créneau")
         if not df_filt.empty:
             synt = df_filt.groupby(["Jour_Num", "Jour", "Heure", "Cours"]).agg(
@@ -394,6 +404,27 @@ def show_manager():
             synt.sort_values(["Jour_Num", "Heure"], inplace=True)
             st.dataframe(synt[["Jour", "Heure", "Cours", "Inscrits", "Presents", "Taux %"]], use_container_width=True, hide_index=True)
         
+        st.write("---")
+
+        # 4. LES TOPS (RETABLIS)
+        c_top1, c_top2 = st.columns(2)
+        with c_top1:
+            st.subheader("🚨 Top 10 Absents")
+            if not df_filt.empty:
+                top_abs = df_filt[df_filt["Statut"]=="Absent"]["Nom"].value_counts().head(10).reset_index()
+                top_abs.columns = ["Nom", "Nb"]
+                st.dataframe(top_abs, use_container_width=True, hide_index=True)
+
+        with c_top2:
+            st.subheader("🏆 Top 10 Assidus")
+            if not df_filt.empty:
+                top_pres = df_filt[df_filt["Statut"]=="Présent"]["Nom"].value_counts().head(10).reset_index()
+                top_pres.columns = ["Nom", "Nb"]
+                st.dataframe(top_pres, use_container_width=True, hide_index=True)
+
+        st.write("---")
+
+        # 5. GRAPHIQUES SUITE
         c_g1, c_g2 = st.columns(2)
         with c_g1:
             st.subheader("Top Cours")
@@ -409,15 +440,15 @@ def show_manager():
     with tab2:
         c_s, c_m = st.columns(2)
         with c_s:
-            st.subheader("Seuils")
-            st.number_input("P1", key="p1_val", value=1)
-            st.number_input("P2", key="p2_val", value=3)
-            st.number_input("P3", key="p3_val", value=5)
+            st.subheader("Seuils P1 / P2 / P3")
+            st.number_input("Seuil P1", key="p1_val", value=1)
+            st.number_input("Seuil P2", key="p2_val", value=3)
+            st.number_input("Seuil P3", key="p3_val", value=5)
         with c_m:
             st.subheader("Messages")
-            st.text_area("P1", key="msg_tpl", value="Bonjour...", height=100)
-            st.text_area("P3", key="msg_p3_tpl", value="Convocation...", height=100)
-            if st.button("Sauvegarder"): st.success("OK")
+            st.text_area("Message P1", key="msg_tpl", value="Bonjour...", height=100)
+            st.text_area("Message P3", key="msg_p3_tpl", value="Convocation...", height=100)
+            if st.button("Sauvegarder la configuration"): st.success("OK")
 
 # =======================
 # 6. NAVIGATION PRINCIPALE
