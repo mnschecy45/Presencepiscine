@@ -243,14 +243,24 @@ def show_reception():
 # 5. MANAGER
 # =======================
 def show_manager():
-    # CSS IMPÉRATIF POUR LES METRIQUES (Anti-Blanc sur Blanc)
+    # CSS : CORRECTION RADICALE DU TEXTE BLANC + METRIQUES
     st.markdown("""
         <style>
-        .stMetric { background-color: #f8f9fa; border: 1px solid #dee2e6; padding: 15px; border-radius: 10px; }
-        [data-testid="stMetricLabel"] { font-weight: bold; color: #666 !important; }
-        [data-testid="stMetricValue"] { color: #000 !important; }
+        /* Force le fond des métriques en blanc/gris clair */
+        [data-testid="stMetric"] {
+            background-color: #f8f9fa !important;
+            border: 1px solid #dee2e6 !important;
+            padding: 15px !important;
+            border-radius: 10px !important;
+            color: black !important;
+        }
+        /* Force TOUT le texte dans les métriques en NOIR */
+        [data-testid="stMetric"] label { color: #333 !important; }
+        [data-testid="stMetric"] div[data-testid="stMetricValue"] { color: #000 !important; }
+        [data-testid="stMetric"] p { color: #000 !important; }
         </style>
     """, unsafe_allow_html=True)
+    
     st.title("📊 Manager")
 
     if st.sidebar.text_input("Mdp", type="password") != MANAGER_PASSWORD:
@@ -301,18 +311,13 @@ def show_manager():
 
     vue = st.sidebar.radio("Vue", ["Mois", "Semaine"])
     if vue == "Mois":
-        # On récupère les mois dispos
         mths_nums = sorted(df_yr["Mois"].unique())
-        # On crée la liste des noms
         mths_names = ["TOUS"] + [mois_map.get(m, str(m)) for m in mths_nums]
-        
         ms = st.sidebar.selectbox("Mois", mths_names)
         
-        if ms == "TOUS":
-            df_filt = df_yr.copy()
+        if ms == "TOUS": df_filt = df_yr.copy()
         else:
-            # On retrouve le numéro du mois
-            # On cherche quel numéro correspond au nom choisi
+            # On retrouve le numéro du mois par son nom
             choix_num = [k for k, v in mois_map.items() if v == ms][0]
             df_filt = df_yr[df_yr["Mois"] == choix_num].copy()
     else:
@@ -335,9 +340,12 @@ def show_manager():
         c3.metric("Absents", absent, delta_color="inverse")
         
         st.divider()
-        st.subheader("📈 Fréquentation")
+        st.subheader("📈 Fréquentation (Évolution)")
         if not df_filt.empty:
+            # CORRECTION DATE FRANCAISE (FINI TUE/WED)
             da = df_filt[df_filt["Statut"]=="Présent"].groupby("Date_dt").size()
+            # On transforme l'index (les dates) en texte "JJ/MM"
+            da.index = da.index.strftime("%d/%m")
             st.area_chart(da, color="#3b82f6")
         
         st.divider()
@@ -389,11 +397,7 @@ def show_manager():
         ct1, ct2 = st.tabs(["📉 Évolution d'un Cours", "🆚 Comparateur Périodes"])
         
         with ct1:
-            st.markdown("""
-            **Comment lire ce graphique ?** Il montre le nombre de présents à chaque séance.  
-            - Si vous voyez **un seul point**, c'est normal : il n'y a qu'une seule date enregistrée pour ce cours.
-            - Au fil des semaines, une **ligne** apparaitra pour montrer si la fréquentation monte ou descend.
-            """)
+            st.markdown("Voir si un cours se remplit ou se vide au fil du temps.")
             liste_cours = sorted([str(c) for c in df_ana["Cours_Complet"].unique() if str(c) != "nan" and str(c) != "Inconnu"])
             c_choix = st.selectbox("Choisir un cours :", liste_cours)
             if c_choix:
@@ -410,13 +414,12 @@ def show_manager():
                 la = f"Sem {sa}"; lb = f"Sem {sb}"
             else:
                 l_m_nums = sorted(df_ana["Mois"].unique())
-                # Conversion en noms pour l'affichage
                 l_m_names = [mois_map.get(m, str(m)) for m in l_m_nums]
                 
                 ma_txt = st.selectbox("Mois A", l_m_names, index=0)
                 mb_txt = st.selectbox("Mois B", l_m_names, index=len(l_m_names)-1 if len(l_m_names)>0 else 0)
                 
-                # Conversion inverse Nom -> Numéro
+                # Retrouver l'ID du mois
                 ma_num = [k for k, v in mois_map.items() if v == ma_txt][0]
                 mb_num = [k for k, v in mois_map.items() if v == mb_txt][0]
                 
@@ -425,7 +428,6 @@ def show_manager():
             
             pa = len(da[da["Statut"]=="Présent"]); pb = len(db[db["Statut"]=="Présent"])
             
-            # Affichage en Noir grâce au CSS
             c1, c2 = st.columns(2)
             c1.metric(f"Présents {la}", pa)
             c2.metric(f"Présents {lb}", pb, delta=pb-pa)
