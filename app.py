@@ -25,50 +25,64 @@ try:
     api = Api(API_TOKEN)
     table = api.table(BASE_ID, TABLE_NAME)
     
+    # On récupère TOUT (y compris les ID pour pouvoir modifier les lignes)
     records = table.all()
     
     if records:
         data = []
         for r in records:
             row = r['fields']
-            row['id'] = r['id']
+            row['id'] = r['id']  # On garde l'ID pour la Réception
             data.append(row)
         df_all = pd.DataFrame(data)
         
+        # Nettoyage des dates
         if "Date" in df_all.columns:
             df_all["Date_dt"] = pd.to_datetime(df_all["Date"], errors='coerce')
     else:
         df_all = pd.DataFrame()
 except Exception as e:
-    st.error(f"Erreur de connexion Airtable : {e}")
+    st.error(f"Erreur de connexion Airtable (Vérifiez vos clés) : {e}")
     df_all = pd.DataFrame()
 
 # =======================
-# 2. FONCTIONS UTILES
+# 2. FONCTIONS UTILES (Sauvegarde & PDF)
 # =======================
 def save_data_to_cloud(df_new):
+    """ Envoie les nouvelles présences vers Airtable """
     progress_bar = st.progress(0)
     total = len(df_new)
+    
     for i, row in df_new.iterrows():
         try:
             statut_final = "Absent" if row["Absent"] else "Présent"
-            date_str = row["Date"].strftime("%Y-%m-%d") if isinstance(row["Date"], (date, datetime)) else str(row["Date"])
+            
+            # Date format texte YYYY-MM-DD
+            if isinstance(row["Date"], (date, datetime)):
+                date_str = row["Date"].strftime("%Y-%m-%d")
+            else:
+                date_str = str(row["Date"])
+
             record = {
                 "Nom": row["Nom"],
                 "Statut": statut_final, 
                 "Date": date_str,
                 "Cours": row["Cours"],
                 "Heure": row["Heure"],
-                "Traite": False
+                "Traite": False # Par défaut, ce n'est pas traité
             }
+            
             table.create(record)
             progress_bar.progress((i + 1) / total)
+            
         except Exception as e:
-            st.error(f"Erreur : {e}")
+            st.error(f"Erreur envoi ligne {i}: {e}")
+
     progress_bar.empty()
     st.toast("Sauvegarde terminée !", icon="☁️")
 
 def parse_pdf_complete(file_bytes):
+    """ Lit le PDF et extrait les noms, cours et heures """
     rows = []
     ignore = ["TCPDF", "www.", "places", "réservées", "disponibles", "ouvertes", "le ", " à ", "Page ", "Généré"]
     try:
@@ -77,11 +91,15 @@ def parse_pdf_complete(file_bytes):
                 txt = page.extract_text()
                 if not txt: continue
                 lines = txt.splitlines()
+                
+                # 1. Trouver la date
                 d_str = ""
                 for l in lines[:15]:
                     m = re.search(r"\d{2}/\d{2}/\d{4}", l)
                     if m: d_str = m.group(0); break
                 s_date = datetime.strptime(d_str, "%d/%m/%Y").date() if d_str else date.today()
+                
+                # 2. Trouver Cours et Heure
                 c_name, h_deb = "Cours Inconnu", "00h00"
                 for l in lines[:15]:
                     ts = re.findall(r"\d{1,2}h\d{2}", l)
@@ -89,9 +107,12 @@ def parse_pdf_complete(file_bytes):
                         h_deb = ts[0]
                         c_name = l[:l.index(ts[0])].strip()
                         break
+                
+                # 3. Trouver les Noms
                 start_index = 0
                 for i, l in enumerate(lines):
                     if "N° réservation" in l: start_index = i + 1; break
+                
                 for l in lines[start_index:]:
                     if not l.strip() or any(x in l for x in ignore): continue
                     l_clean = re.sub(r'\d+', '', l).strip()
@@ -106,10 +127,11 @@ def parse_pdf_complete(file_bytes):
     return pd.DataFrame(rows)
 
 # =======================
-# 3. MAÎTRE-NAGEUR
+# 3. INTERFACE MAÎTRE-NAGEUR
 # =======================
 def show_maitre_nageur():
     st.title("👨‍🏫 Appel Bassin")
+    
     if st.session_state.get("appel_termine", False):
         st.success("✅ Appel enregistré !")
         if st.button("Nouvel appel"):
@@ -120,17 +142,20 @@ def show_maitre_nageur():
         return
 
     up = st.file_uploader("Charger PDF", type=["pdf"])
+    
     if up:
         if 'current_file' not in st.session_state or st.session_state.current_file != up.name:
             st.session_state.current_file = up.name
             st.session_state.df_appel = parse_pdf_complete(up.read())
 
         df = st.session_state.df_appel
+        
         if not df.empty:
             d_obj = df['Date'].iloc[0]
-            d_aff = d_obj.strftime('%d/%m/%Y') if isinstance(d_obj, (date, datetime)) else str(d_obj)
-            st.info(f"📅 **{d_aff}** | {df['Cours'].iloc[0]} ({df['Heure'].iloc[0]})")
+            date_str = d_obj.strftime('%d/%m/%Y') if isinstance(d_obj, (date, datetime)) else str(d_obj)
+            st.info(f"📅 **{date_str}** | {df['Cours'].iloc[0]} ({df['Heure'].iloc[0]})")
 
+            # Actions rapides
             c1, c2 = st.columns(2)
             if c1.button("✅ TOUT PRÉSENT"):
                 for i in range(len(df)): st.session_state[f"cb_{i}"] = True
@@ -138,11 +163,14 @@ def show_maitre_nageur():
             if c2.button("❌ TOUT ABSENT"):
                 for i in range(len(df)): st.session_state[f"cb_{i}"] = False
                 st.rerun()
-            
+
             st.write("---")
+
+            # Liste Élèves
             for idx, row in df.iterrows():
                 key = f"cb_{idx}"
                 if key not in st.session_state: st.session_state[key] = False
+                
                 bg = "#dcfce7" if st.session_state[key] else "#fee2e2"
                 col_n, col_c = st.columns([4, 1])
                 col_n.markdown(f"<div style='padding:10px; background:{bg}; border-radius:5px;'><b>{row['Nom']} {row['Prenom']}</b></div>", unsafe_allow_html=True)
@@ -150,111 +178,148 @@ def show_maitre_nageur():
                 df.at[idx, "Absent"] = not st.session_state[key]
 
             st.write("---")
+            
+            # Ajout Manuel
             with st.expander("➕ Ajouter un client manuellement"):
-                with st.form("add_m"):
-                    nom_m = st.text_input("Nom").upper()
+                with st.form("add_manual"):
+                    nom_m = st.text_input("Nom Client").upper()
                     if st.form_submit_button("Ajouter"):
-                        nr = df.iloc[0].copy()
-                        nr["Nom"] = nom_m
-                        nr["Prenom"] = "(Manuel)"
-                        nr["Manuel"] = True
-                        nr["Absent"] = False
-                        st.session_state.df_appel = pd.concat([df, pd.DataFrame([nr])], ignore_index=True)
+                        new_row = df.iloc[0].copy()
+                        new_row["Nom"] = nom_m
+                        new_row["Prenom"] = "(Manuel)"
+                        new_row["Manuel"] = True
+                        new_row["Absent"] = False
+                        st.session_state.df_appel = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
                         st.rerun()
 
-            st.metric("Clients dans l'eau", len(df[df["Absent"]==False]))
-            if st.button("💾 ENREGISTRER", type="primary"):
+            # Validation Finale
+            nb_presents = len(df[df["Absent"]==False])
+            st.metric("Clients dans l'eau", nb_presents)
+            
+            if st.button("💾 ENREGISTRER DÉFINITIVEMENT", type="primary"):
                 save_data_to_cloud(df)
                 st.session_state.appel_termine = True
                 st.rerun()
 
 # =======================
-# 4. RÉCEPTION
+# 4. INTERFACE RÉCEPTION (CRM)
 # =======================
 def show_reception():
-    st.title("💁 Réception")
-    if df_all.empty: return
+    st.title("💁 Réception - Gestion Clients")
 
+    if df_all.empty:
+        st.warning("Chargement des données...")
+        return
+
+    # Prépa données
     df_work = df_all.copy()
     if "Date_dt" not in df_work.columns and "Date" in df_work.columns:
          df_work["Date_dt"] = pd.to_datetime(df_work["Date"], errors='coerce')
     if "Traite" not in df_work.columns: df_work["Traite"] = False
 
-    tab1, tab2 = st.tabs(["⚡ À TRAITER", "✅ HISTORIQUE"])
+    tab_todo, tab_hist = st.tabs(["⚡ À TRAITER", "✅ HISTORIQUE"])
 
-    with tab1:
+    # --- A TRAITER ---
+    with tab_todo:
+        # Filtre : Absent ET Pas Traité
         df_todo = df_work[(df_work["Statut"] == "Absent") & (df_work["Traite"] != True)]
+        
         if df_todo.empty:
-            st.success("Tout est à jour !")
+            st.success("🎉 Rien à faire ! Tout est à jour.")
         else:
             st.write(f"**{len(df_todo)} absences** en attente.")
-            client = st.selectbox("Client", df_todo["Nom"].unique())
-            if client:
-                all_abs = df_work[(df_work["Nom"] == client) & (df_work["Statut"] == "Absent")]
-                nb = len(all_abs)
+            client_select = st.selectbox("Sélectionner un client", df_todo["Nom"].unique())
+            
+            if client_select:
+                # 1. Calcul Niveau (Sur historique complet)
+                all_abs = df_work[(df_work["Nom"] == client_select) & (df_work["Statut"] == "Absent")]
+                nb_total = len(all_abs)
                 
                 s1 = st.session_state.get("p1_val", 1)
                 s2 = st.session_state.get("p2_val", 3)
                 s3 = st.session_state.get("p3_val", 5)
                 
-                niv = 1
-                if nb >= s3: niv = 3
-                elif nb >= s2: niv = 2
+                # Récupération des Labels Configurés (ou défaut)
+                l1 = st.session_state.get("p1_label", "Envoyer un mail")
+                l2 = st.session_state.get("p2_label", "Appeler le client")
+                l3 = st.session_state.get("p3_label", "Convocation / RDV")
                 
-                if niv == 3: st.error(f"🔴 NIVEAU 3 ({nb} abs)")
-                elif niv == 2: st.warning(f"🟠 NIVEAU 2 ({nb} abs)")
-                else: st.info(f"🟡 NIVEAU 1 ({nb} abs)")
+                niveau = 1
+                label_actuel = l1
+                if nb_total >= s3: 
+                    niveau = 3
+                    label_actuel = l3
+                elif nb_total >= s2: 
+                    niveau = 2
+                    label_actuel = l2
+                
+                # Alertes visuelles dynamiques
+                if niveau == 3: st.error(f"🔴 NIVEAU 3 - {label_actuel.upper()} ({nb_total} absences)")
+                elif niveau == 2: st.warning(f"🟠 NIVEAU 2 - {label_actuel.upper()} ({nb_total} absences)")
+                else: st.info(f"🟡 NIVEAU 1 - {label_actuel.upper()} ({nb_total} absences)")
 
-                to_process = df_todo[df_todo["Nom"] == client].sort_values("Date_dt", ascending=False)
-                ids_todo = []
-                txt = []
-                for _, r in to_process.iterrows():
-                    ids_todo.append(r['id'])
-                    d = r["Date_dt"].strftime("%d/%m") if pd.notnull(r["Date_dt"]) else "?"
-                    c = r.get("Cours", "Séance")
-                    txt.append(f"- {c} le {d}")
+                # 2. Détails (seulement les non traités)
+                to_process = df_todo[df_todo["Nom"] == client_select].sort_values("Date_dt", ascending=False)
+                ids_a_traiter = []
+                txt_list = []
                 
-                msg = ""
-                lbl = "Traité"
-                if niv == 2:
-                    st.write("**Action : APPEL TÉLÉPHONIQUE**")
-                    lbl = "✅ J'ai appelé"
-                elif niv == 3:
-                    st.write("**Action : CONVOCATION**")
+                for _, row in to_process.iterrows():
+                    ids_a_traiter.append(row['id'])
+                    d = row["Date_dt"].strftime("%d/%m") if pd.notnull(row["Date_dt"]) else "?"
+                    c = row.get("Cours", "Séance")
+                    txt_list.append(f"- {c} le {d}")
+                
+                details_str = "\n".join(txt_list)
+
+                # 3. Action
+                msg_final = ""
+                label_btn = f"✅ {label_actuel} (Fait)"
+                
+                if niveau == 2:
+                    st.markdown(f"### 📞 Action : {label_actuel}")
+                    st.write("*Script : Bonjour, nous avons noté plusieurs absences. Tout va bien ?*")
+                    label_btn = f"✅ J'ai fait : {label_actuel}"
+                elif niveau == 3:
+                    st.markdown(f"### ✉️ Action : {label_actuel}")
                     tpl = st.session_state.get("msg_p3_tpl", "Bonjour {prenom}, RDV nécessaire ({details}).")
-                    msg = tpl.replace("{prenom}", client).replace("{details}", "\n".join(txt))
-                    st.text_area("Copier :", value=msg, height=150)
-                    lbl = "✅ Convocation envoyée"
+                    msg_final = tpl.replace("{prenom}", client_select).replace("{details}", details_str)
+                    st.text_area("Copier :", value=msg_final, height=200)
+                    label_btn = f"✅ {label_actuel} envoyé"
                 else:
-                    st.write("**Action : MAIL**")
+                    st.markdown(f"### 📧 Action : {label_actuel}")
                     tpl = st.session_state.get("msg_tpl", "Bonjour {prenom}, absences : {details}.")
-                    msg = tpl.replace("{prenom}", client).replace("{details}", "\n".join(txt))
-                    st.text_area("Copier :", value=msg, height=150)
-                    lbl = "✅ Mail envoyé"
+                    msg_final = tpl.replace("{prenom}", client_select).replace("{details}", details_str)
+                    st.text_area("Copier :", value=msg_final, height=200)
+                    label_btn = f"✅ {label_actuel} envoyé"
 
-                if st.button(lbl, type="primary"):
+                if st.button(label_btn, type="primary"):
+                    prog = st.progress(0)
                     now = datetime.now().strftime("%Y-%m-%d %H:%M")
-                    for pid in ids_todo:
-                        try: table.update(pid, {"Traite": True, "Date_Traitement": now})
+                    for idx, pid in enumerate(ids_a_traiter):
+                        try:
+                            table.update(pid, {"Traite": True, "Date_Traitement": now})
+                            prog.progress((idx+1)/len(ids_a_traiter))
                         except: pass
-                    st.success("Archivé !")
+                    st.success(f"Dossier {client_select} archivé !")
                     st.rerun()
 
-    with tab2:
-        df_done = df_work[(df_work["Statut"] == "Absent") & (df_work["Traite"] == True)]
+    # --- HISTORIQUE ---
+    with tab_hist:
+        df_done = df_work[(df_work["Statut"] == "Absent") & (df_work["Traite"] == True)].copy()
         if not df_done.empty:
             cols = ["Nom", "Date", "Cours"]
             if "Date_Traitement" in df_done.columns:
                 cols.append("Date_Traitement")
-                df_done = df_done.sort_values("Date_Traitement", ascending=False)
+                df_done.sort_values("Date_Traitement", ascending=False, inplace=True)
             st.dataframe(df_done[cols], use_container_width=True)
         else:
-            st.info("Vide")
+            st.info("Vide.")
 
 # =======================
-# 5. MANAGER (CORRIGÉ & COMPLET)
+# 5. INTERFACE MANAGER (Analytique & Config Restaurée)
 # =======================
 def show_manager():
+    # Style Clair
     st.markdown("""
         <style>
         .stMetric { background-color: #f8f9fa; border: 1px solid #dee2e6; padding: 15px; border-radius: 10px; color: #31333F; }
@@ -313,9 +378,7 @@ def show_manager():
         m_idx = mths[m_list.index(m_sel)-1]
         df_filt = df_yr[df_yr["Mois"] == m_idx].copy()
 
-    # --- CRÉATION DE L'ÉTIQUETTE INTELLIGENTE (COURS + JOUR + HEURE) ---
-    # Pour différencier le cours du Lundi de celui du Mercredi
-    # Exemple résultat : "Aquafitness (Lundi 12h15)"
+    # Étiquette intelligente
     df_filt["Cours_Complet"] = df_filt["Cours"] + " (" + df_filt["Jour"] + " " + df_filt["Heure"] + ")"
 
     # --- DASHBOARD ---
@@ -334,7 +397,6 @@ def show_manager():
         
         st.write("---")
         
-        # 1. GRAPH EVOLUTION (FRANCAIS)
         st.subheader("📈 Évolution de la Fréquentation")
         if not df_filt.empty:
             daily = df_filt[df_filt["Statut"] == "Présent"].groupby("Date_dt").size()
@@ -342,20 +404,16 @@ def show_manager():
         
         st.write("---")
 
-        # 2. TOP COURS (DETAILLES) & SEMAINE
         c_g1, c_g2 = st.columns(2)
         with c_g1:
             st.subheader("🔥 Top Cours (Les plus fréquentés)")
             if not df_filt.empty:
-                # On utilise la colonne intelligente créée plus haut
-                # On compte les présents uniquement pour le succès
                 top_data = df_filt[df_filt["Statut"]=="Présent"]["Cours_Complet"].value_counts().head(10)
                 st.bar_chart(top_data)
         
         with c_g2:
             st.subheader("📅 Affluence par Jour")
             if not df_filt.empty:
-                # Tri forcé Lundi -> Dimanche
                 sem = df_filt[df_filt["Statut"]=="Présent"].groupby("Jour").size()
                 ordre = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
                 sem = sem.reindex(ordre, fill_value=0)
@@ -363,7 +421,6 @@ def show_manager():
         
         st.write("---")
 
-        # 3. TABLEAU DETAILLE
         st.subheader("📋 Détails par Créneau")
         if not df_filt.empty:
             synt = df_filt.groupby(["Jour_Num", "Jour", "Heure", "Cours"]).agg(
@@ -376,7 +433,6 @@ def show_manager():
 
         st.write("---")
 
-        # 4. LES TOPS CLIENTS
         c_top1, c_top2 = st.columns(2)
         with c_top1:
             st.subheader("🚨 Top 10 Absents")
@@ -392,18 +448,50 @@ def show_manager():
                 top_pres.columns = ["Nom", "Nb Présences"]
                 st.dataframe(top_pres, use_container_width=True, hide_index=True)
 
+    # ==========================
+    # RESTAURATION DE LA CONFIG COMPLÈTE
+    # ==========================
     with tab2:
-        c_s, c_m = st.columns(2)
-        with c_s:
-            st.subheader("Seuils Alertes")
-            st.number_input("P1", key="p1_val", value=1)
-            st.number_input("P2", key="p2_val", value=3)
-            st.number_input("P3", key="p3_val", value=5)
-        with c_m:
-            st.subheader("Messages")
-            st.text_area("P1", key="msg_tpl", value="Bonjour...", height=100)
-            st.text_area("P3", key="msg_p3_tpl", value="Convocation...", height=100)
-            if st.button("Sauvegarder"): st.success("OK")
+        st.header("⚙️ Paramètres des Relances")
+        st.info("Personnalisez ici les seuils, les noms des actions et les messages.")
+
+        col_seuils, col_msg = st.columns([1, 1])
+
+        with col_seuils:
+            st.subheader("1. Paliers & Actions")
+            
+            # P1
+            st.markdown("---")
+            c1a, c1b = st.columns([1, 2])
+            st.number_input("Seuil P1 (Nb Absences)", key="p1_val", value=1, min_value=1)
+            st.text_input("Nom Action P1", key="p1_label", value="Envoyer un mail")
+            
+            # P2
+            st.markdown("---")
+            c2a, c2b = st.columns([1, 2])
+            st.number_input("Seuil P2 (Nb Absences)", key="p2_val", value=3, min_value=1)
+            st.text_input("Nom Action P2", key="p2_label", value="Appeler le client")
+            
+            # P3
+            st.markdown("---")
+            c3a, c3b = st.columns([1, 2])
+            st.number_input("Seuil P3 (Nb Absences)", key="p3_val", value=5, min_value=1)
+            st.text_input("Nom Action P3", key="p3_label", value="Convocation / RDV")
+
+        with col_msg:
+            st.subheader("2. Modèles de Messages")
+            
+            st.markdown("**✉️ Message P1 (Mail)**")
+            default_p1 = "Bonjour {prenom},\n\nSauf erreur de notre part, nous avons relevé les absences suivantes :\n{details}\n\nAfin de ne pas perdre le bénéfice de votre progression, merci de nous confirmer votre présence pour la prochaine séance.\n\nCordialement,\nL'équipe Piscine."
+            st.text_area("Template P1", key="msg_tpl", value=default_p1, height=250)
+
+            st.markdown("---")
+            st.markdown("**✉️ Message P3 (Convocation)**")
+            default_p3 = "Bonjour {prenom},\n\nSuite à de nombreuses absences ({details}), nous souhaiterions faire un point avec vous.\nMerci de passer à l'accueil pour fixer un rendez-vous."
+            st.text_area("Template P3", key="msg_p3_tpl", value=default_p3, height=150)
+
+        if st.button("💾 Sauvegarder la configuration", type="primary"):
+            st.success("Configuration enregistrée avec succès !")
 
 # =======================
 # 6. NAVIGATION
