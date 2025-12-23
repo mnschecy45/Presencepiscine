@@ -3,7 +3,7 @@ import pandas as pd
 import pdfplumber
 import re
 import io
-import altair as alt  # <--- Ajout pour le graphique des jours
+import altair as alt
 from datetime import datetime, date
 from pyairtable import Api
 
@@ -51,7 +51,6 @@ def save_data_to_cloud(df_new):
         try:
             statut = "Absent" if row["Absent"] else "Présent"
             d_str = row["Date"].strftime("%Y-%m-%d") if isinstance(row["Date"], (date, datetime)) else str(row["Date"])
-            # On envoie tout en string pour éviter les bugs
             rec = {
                 "Nom": str(row["Nom"]),
                 "Statut": statut,
@@ -183,7 +182,6 @@ def show_reception():
             st.write(f"**{len(todo)} absences**")
             cli = st.selectbox("Client", todo["Nom"].unique())
             if cli:
-                # Calcul niveau
                 tot_abs = len(df_w[(df_w["Nom"] == cli) & (df_w["Statut"] == "Absent")])
                 s1 = st.session_state.get("p1_val", 1); s2 = st.session_state.get("p2_val", 3); s3 = st.session_state.get("p3_val", 5)
                 l1 = st.session_state.get("p1_label", "Mail"); l2 = st.session_state.get("p2_label", "Tel"); l3 = st.session_state.get("p3_label", "RDV")
@@ -242,12 +240,15 @@ def show_reception():
             st.info("Vide")
 
 # =======================
-# 5. MANAGER (CORRECTIF CRASH + ORDRE JOURS)
+# 5. MANAGER
 # =======================
 def show_manager():
+    # CSS IMPÉRATIF POUR LES METRIQUES (Anti-Blanc sur Blanc)
     st.markdown("""
         <style>
-        .stMetric { background-color: #f8f9fa; border: 1px solid #dee2e6; padding: 15px; border-radius: 10px; color: #31333F; }
+        .stMetric { background-color: #f8f9fa; border: 1px solid #dee2e6; padding: 15px; border-radius: 10px; }
+        [data-testid="stMetricLabel"] { font-weight: bold; color: #666 !important; }
+        [data-testid="stMetricValue"] { color: #000 !important; }
         </style>
     """, unsafe_allow_html=True)
     st.title("📊 Manager")
@@ -257,13 +258,12 @@ def show_manager():
     if df_all.empty:
         st.warning("Pas de données"); return
 
-    # --- PREPA DONNEES ROBUSTE (ANTI-CRASH) ---
+    # --- NETTOYAGE ---
     df_ana = df_all.copy()
     if "Date_dt" not in df_ana.columns and "Date" in df_ana.columns:
          df_ana["Date_dt"] = pd.to_datetime(df_ana["Date"], errors='coerce')
     df_ana = df_ana.dropna(subset=["Date_dt"])
 
-    # 1. Nettoyage Heure (évite 18:40:00)
     def clean_h(v):
         if pd.isna(v): return "?"
         s = str(v)
@@ -272,12 +272,9 @@ def show_manager():
             except: return s
         return s
 
-    if "Heure" in df_ana.columns: 
-        df_ana["Heure"] = df_ana["Heure"].apply(clean_h).astype(str)
-    else: 
-        df_ana["Heure"] = "?"
+    if "Heure" in df_ana.columns: df_ana["Heure"] = df_ana["Heure"].apply(clean_h).astype(str)
+    else: df_ana["Heure"] = "?"
 
-    # 2. Nettoyage Cours et Jour (Force le string pour éviter TypeError)
     if "Cours" not in df_ana.columns: df_ana["Cours"] = "Inconnu"
     df_ana["Cours"] = df_ana["Cours"].fillna("Inconnu").astype(str)
 
@@ -285,13 +282,16 @@ def show_manager():
     df_ana["Jour_Num"] = df_ana["Date_dt"].dt.dayofweek
     df_ana["Jour"] = df_ana["Jour_Num"].map(jours).fillna("?").astype(str)
     
-    # 3. Colonnes Temps
     df_ana["Annee"] = df_ana["Date_dt"].dt.year
     df_ana["Mois"] = df_ana["Date_dt"].dt.month
     df_ana["Semaine"] = df_ana["Date_dt"].dt.isocalendar().week
-
-    # 4. Création Colonne Unique (Sécurisée)
     df_ana["Cours_Complet"] = df_ana["Cours"] + " (" + df_ana["Jour"] + " " + df_ana["Heure"] + ")"
+
+    # --- DICTIONNAIRE MOIS ---
+    mois_map = {
+        1: "Janvier", 2: "Février", 3: "Mars", 4: "Avril", 5: "Mai", 6: "Juin",
+        7: "Juillet", 8: "Août", 9: "Septembre", 10: "Octobre", 11: "Novembre", 12: "Décembre"
+    }
 
     # --- FILTRES ---
     st.sidebar.header("📅 Filtres")
@@ -301,11 +301,20 @@ def show_manager():
 
     vue = st.sidebar.radio("Vue", ["Mois", "Semaine"])
     if vue == "Mois":
-        mths = sorted(df_yr["Mois"].unique())
-        ml = ["TOUS"] + [pd.to_datetime(f"2022-{m}-01").strftime("%B") for m in mths]
-        ms = st.sidebar.selectbox("Mois", ml)
-        if ms == "TOUS": df_filt = df_yr.copy()
-        else: df_filt = df_yr[df_yr["Mois"] == mths[ml.index(ms)-1]].copy()
+        # On récupère les mois dispos
+        mths_nums = sorted(df_yr["Mois"].unique())
+        # On crée la liste des noms
+        mths_names = ["TOUS"] + [mois_map.get(m, str(m)) for m in mths_nums]
+        
+        ms = st.sidebar.selectbox("Mois", mths_names)
+        
+        if ms == "TOUS":
+            df_filt = df_yr.copy()
+        else:
+            # On retrouve le numéro du mois
+            # On cherche quel numéro correspond au nom choisi
+            choix_num = [k for k, v in mois_map.items() if v == ms][0]
+            df_filt = df_yr[df_yr["Mois"] == choix_num].copy()
     else:
         sems = sorted(df_yr["Semaine"].unique())
         sl = [f"Semaine {s}" for s in sems]
@@ -341,12 +350,10 @@ def show_manager():
         with g2:
             st.subheader("📅 Par Jour")
             if not df_filt.empty:
-                # CORRECTION ORDRE JOURS AVEC ALTAIR
                 sem_counts = df_filt[df_filt["Statut"]=="Présent"].groupby("Jour").size()
                 ordre_jours = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
                 sem_df = pd.DataFrame(sem_counts).reindex(ordre_jours, fill_value=0).reset_index()
                 sem_df.columns = ["Jour", "Nombre"]
-                
                 chart_j = alt.Chart(sem_df).mark_bar(color="#76b900").encode(
                     x=alt.X('Jour', sort=ordre_jours, title=None),
                     y=alt.Y('Nombre', title=None)
@@ -378,17 +385,23 @@ def show_manager():
                 st.dataframe(tp, use_container_width=True, hide_index=True)
 
     with t_comp:
-        st.info("Comparateur & Évolution")
-        ct1, ct2 = st.tabs(["📉 Cours", "🆚 Périodes"])
+        st.info("📊 Suivez la tendance de vos cours.")
+        ct1, ct2 = st.tabs(["📉 Évolution d'un Cours", "🆚 Comparateur Périodes"])
+        
         with ct1:
-            # SECURITE ICI AUSSI
-            liste_cours = sorted([str(c) for c in df_ana["Cours_Complet"].unique() if str(c) != "nan"])
-            c_choix = st.selectbox("Cours :", liste_cours)
+            st.markdown("""
+            **Comment lire ce graphique ?** Il montre le nombre de présents à chaque séance.  
+            - Si vous voyez **un seul point**, c'est normal : il n'y a qu'une seule date enregistrée pour ce cours.
+            - Au fil des semaines, une **ligne** apparaitra pour montrer si la fréquentation monte ou descend.
+            """)
+            liste_cours = sorted([str(c) for c in df_ana["Cours_Complet"].unique() if str(c) != "nan" and str(c) != "Inconnu"])
+            c_choix = st.selectbox("Choisir un cours :", liste_cours)
             if c_choix:
                 sub_c = df_ana[df_ana["Cours_Complet"] == c_choix].groupby("Date_dt").size()
                 st.line_chart(sub_c)
+        
         with ct2:
-            st.write("Comparaison A vs B")
+            st.write("Comparer les résultats entre deux périodes.")
             if vue == "Semaine":
                 l_s = sorted(df_ana["Semaine"].unique())
                 sa = st.selectbox("Sem A", l_s, index=0)
@@ -396,13 +409,23 @@ def show_manager():
                 da = df_ana[df_ana["Semaine"]==sa]; db = df_ana[df_ana["Semaine"]==sb]
                 la = f"Sem {sa}"; lb = f"Sem {sb}"
             else:
-                l_m = sorted(df_ana["Mois"].unique())
-                ma = st.selectbox("Mois A", l_m)
-                mb = st.selectbox("Mois B", l_m)
-                da = df_ana[df_ana["Mois"]==ma]; db = df_ana[df_ana["Mois"]==mb]
-                la = f"Mois {ma}"; lb = f"Mois {mb}"
+                l_m_nums = sorted(df_ana["Mois"].unique())
+                # Conversion en noms pour l'affichage
+                l_m_names = [mois_map.get(m, str(m)) for m in l_m_nums]
+                
+                ma_txt = st.selectbox("Mois A", l_m_names, index=0)
+                mb_txt = st.selectbox("Mois B", l_m_names, index=len(l_m_names)-1 if len(l_m_names)>0 else 0)
+                
+                # Conversion inverse Nom -> Numéro
+                ma_num = [k for k, v in mois_map.items() if v == ma_txt][0]
+                mb_num = [k for k, v in mois_map.items() if v == mb_txt][0]
+                
+                da = df_ana[df_ana["Mois"]==ma_num]; db = df_ana[df_ana["Mois"]==mb_num]
+                la = f"{ma_txt}"; lb = f"{mb_txt}"
             
             pa = len(da[da["Statut"]=="Présent"]); pb = len(db[db["Statut"]=="Présent"])
+            
+            # Affichage en Noir grâce au CSS
             c1, c2 = st.columns(2)
             c1.metric(f"Présents {la}", pa)
             c2.metric(f"Présents {lb}", pb, delta=pb-pa)
