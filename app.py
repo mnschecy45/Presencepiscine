@@ -179,7 +179,7 @@ def show_maitre_nageur():
                 st.rerun()
 
 # =======================
-# 4. RÉCEPTION (CORRIGÉ)
+# 4. RÉCEPTION (AVEC GESTION DES MANUELS)
 # =======================
 def show_reception():
     st.title("💁 Réception")
@@ -190,22 +190,25 @@ def show_reception():
          df_w["Date_dt"] = pd.to_datetime(df_w["Date"], errors='coerce')
     if "Traite" not in df_w.columns: df_w["Traite"] = False
 
-    t1, t2 = st.tabs(["⚡ À TRAITER", "✅ HISTORIQUE"])
+    # On crée 3 onglets maintenant
+    t1, t2, t3 = st.tabs(["⚡ ABSENCES", "⚠️ NON INSCRITS", "✅ HISTORIQUE"])
 
+    # --- ONGLET 1 : ABSENCES (Classique) ---
     with t1:
-        todo = df_w[(df_w["Statut"] == "Absent") & (df_w["Traite"] != True)]
+        # On ne prend que les Absents qui ne sont PAS des ajouts manuels
+        todo = df_w[(df_w["Statut"] == "Absent") & (df_w["Traite"] != True) & (df_w["Prenom"] != "(Manuel)")]
         if todo.empty:
-            st.success("Rien à traiter.")
+            st.success("Aucune absence à traiter.")
         else:
-            st.write(f"**{len(todo)} absences**")
-            cli = st.selectbox("Client", todo["Nom"].unique())
+            st.write(f"**{len(todo)} absences en attente**")
+            cli = st.selectbox("Client (Absent)", todo["Nom"].unique())
             if cli:
+                # ... (Le code de calcul des niveaux d'absence reste le même) ...
                 tot_abs = len(df_w[(df_w["Nom"] == cli) & (df_w["Statut"] == "Absent")])
                 s1 = st.session_state.get("p1_val", 1); s2 = st.session_state.get("p2_val", 3); s3 = st.session_state.get("p3_val", 5)
                 l1 = st.session_state.get("p1_label", "Mail"); l2 = st.session_state.get("p2_label", "Tel"); l3 = st.session_state.get("p3_label", "RDV")
                 
-                niv = 1
-                lbl = l1
+                niv = 1; lbl = l1
                 if tot_abs >= s3: niv=3; lbl=l3
                 elif tot_abs >= s2: niv=2; lbl=l2
                 
@@ -213,61 +216,88 @@ def show_reception():
                 st.markdown(f"### {color} NIVEAU {niv} - {lbl} ({tot_abs} abs)")
 
                 sub = todo[todo["Nom"] == cli].sort_values("Date_dt", ascending=False)
-                ids, txts = [], []
-                for _, r in sub.iterrows():
-                    ids.append(r['id'])
-                    d = r["Date_dt"].strftime("%d/%m") if pd.notnull(r["Date_dt"]) else "?"
-                    c = r.get("Cours", "Séance")
-                    txts.append(f"- {c} le {d}")
+                # Récupération des IDs pour mise à jour
+                ids = sub['id'].tolist()
                 
+                # Génération du texte
+                txts = [f"- {r.get('Cours','?')} le {r['Date_dt'].strftime('%d/%m')}" for _, r in sub.iterrows()]
                 det = "\n".join(txts)
-                msg_val = ""
-                btn_txt = f"✅ Action {lbl} Faite"
                 
                 tpl_def_p1 = "Bonjour {prenom},\n\nSauf erreur de notre part, nous avons relevé les absences suivantes :\n{details}\n\nMerci de confirmer votre présence."
-                tpl_def_p3 = "Bonjour {prenom},\n\nSuite à de nombreuses absences ({details}), merci de passer à l'accueil."
                 tpl_p1 = st.session_state.get("msg_tpl", tpl_def_p1)
-                tpl_p3 = st.session_state.get("msg_p3_tpl", tpl_def_p3)
+                
+                msg_val = tpl_p1.replace("{prenom}", cli).replace("{details}", det)
+                st.text_area("Message à envoyer :", msg_val, height=150)
 
-                if niv == 2:
-                    st.write("**Action : APPEL**")
-                    st.info("Script : Bonjour, tout va bien ?")
-                elif niv == 3:
-                    st.write("**Action : CONVOCATION**")
-                    msg_val = tpl_p3.replace("{prenom}", cli).replace("{details}", det)
-                    st.text_area("Copier :", msg_val, height=150)
-                else:
-                    st.write("**Action : MAIL**")
-                    msg_val = tpl_p1.replace("{prenom}", cli).replace("{details}", det)
-                    st.text_area("Copier :", msg_val, height=150)
-
-                if st.button(btn_txt, type="primary"):
+                if st.button(f"✅ Traiter {lbl}", type="primary", key="btn_abs"):
                     now = datetime.now().strftime("%Y-%m-%d %H:%M")
                     for pid in ids:
                         try: table.update(pid, {"Traite": True, "Date_Traitement": now})
                         except: pass
-                    st.success("Archivé !")
+                    st.success("Traité !")
                     st.rerun()
 
+    # --- ONGLET 2 : NON INSCRITS (Nouveau !) ---
     with t2:
-        done = df_w[(df_w["Statut"] == "Absent") & (df_w["Traite"] == True)]
-        if not done.empty:
-            cols = ["Nom", "Date", "Cours"]
-            if "Date_Traitement" in done.columns:
-                # --- CORRECTION ICI ---
-                # On convertit la colonne en format date python
-                done["Date_Traitement"] = pd.to_datetime(done["Date_Traitement"])
-                # On trie
-                done = done.sort_values("Date_Traitement", ascending=False)
-                # On formate en texte propre "23/12/2025 10:03"
-                done["Date_Traitement"] = done["Date_Traitement"].dt.strftime("%d/%m/%Y %H:%M")
+        # On cherche ceux dont le prénom est "(Manuel)" et qui ne sont pas traités
+        manuels = df_w[(df_w["Prenom"] == "(Manuel)") & (df_w["Traite"] != True)]
+        
+        if manuels.empty:
+            st.success("Aucun dossier non-inscrit.")
+        else:
+            st.warning(f"**{len(manuels)} personnes venues sans inscription**")
+            
+            # Sélection du client manuel
+            cli_man = st.selectbox("Client (Non Inscrit)", manuels["Nom"].unique())
+            
+            if cli_man:
+                # On récupère les lignes concernées
+                sub_m = manuels[manuels["Nom"] == cli_man]
+                ids_m = sub_m['id'].tolist()
                 
+                # Infos pour le message
+                last_cours = sub_m.iloc[0]["Cours"]
+                last_date = sub_m.iloc[0]["Date_dt"].strftime("%d/%m") if pd.notnull(sub_m.iloc[0]["Date_dt"]) else "?"
+                
+                st.info(f"Dernier passage : {last_cours} le {last_date}")
+
+                # Récupération du modèle de message défini dans le Manager
+                tpl_def_man = "Bonjour {nom},\n\nVous avez participé au cours de {cours} le {date} sans inscription.\nMerci de passer à l'accueil."
+                tpl_man = st.session_state.get("msg_manual_tpl", tpl_def_man)
+                
+                msg_fin = tpl_man.replace("{nom}", cli_man).replace("{cours}", str(last_cours)).replace("{date}", last_date)
+                
+                st.markdown("#### 📧 Message de régularisation")
+                st.text_area("A copier :", msg_fin, height=150, key="txt_man")
+                
+                if st.button("✅ Notifié & Traité", type="primary", key="btn_man"):
+                    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+                    for pid in ids_m:
+                        try: table.update(pid, {"Traite": True, "Date_Traitement": now})
+                        except: pass
+                    st.success("Dossier régularisé !")
+                    st.rerun()
+
+    # --- ONGLET 3 : HISTORIQUE (Tout confondu) ---
+    with t3:
+        # On affiche l'historique des Absents traités ET des Manuels traités
+        # Condition : (Statut=Absent OU Prenom=(Manuel)) ET Traite=True
+        done = df_w[((df_w["Statut"] == "Absent") | (df_w["Prenom"] == "(Manuel)")) & (df_w["Traite"] == True)]
+        
+        if not done.empty:
+            cols = ["Nom", "Date", "Cours", "Statut"]
+            if "Date_Traitement" in done.columns:
+                done["Date_Traitement"] = pd.to_datetime(done["Date_Traitement"])
+                done = done.sort_values("Date_Traitement", ascending=False)
+                done["Date_Traitement"] = done["Date_Traitement"].dt.strftime("%d/%m/%Y %H:%M")
                 cols.append("Date_Traitement")
+            
+            # On colore le statut pour distinguer visuellement
             st.dataframe(done[cols], use_container_width=True)
         else:
-            st.info("Vide")
+            st.info("Historique vide")
 # =======================
-# 5. MANAGER
+# 5. MANAGER (COMPLET AVEC NOUVELLE CONFIG)
 # =======================
 def show_manager():
     st.markdown("""
@@ -374,14 +404,12 @@ def show_manager():
                     tc = df_filt[df_filt["Statut"]=="Présent"]["Cours_Complet"].value_counts().head(10)
                     st.bar_chart(tc)
             with g2:
-                # NOUVEAU GRAPHIQUE DES ABSENCES
                 st.subheader("📉 Top Cours (Absences)")
                 if not df_filt.empty:
-                    # On filtre que les absents
                     df_abs = df_filt[df_filt["Statut"]=="Absent"]
                     if not df_abs.empty:
                         tc_abs = df_abs["Cours_Complet"].value_counts().head(10)
-                        st.bar_chart(tc_abs, color="#ff4b4b") # Rouge
+                        st.bar_chart(tc_abs, color="#ff4b4b")
                     else:
                         st.success("Aucune absence sur cette période.")
 
@@ -461,13 +489,13 @@ def show_manager():
                 c2.metric(f"Présents {lb}", pb, delta=pb-pa)
 
     # ----------------------------------------------------
-    # TAB 3 : CONFIG
+    # TAB 3 : CONFIG (MODIFIÉ POUR MESSAGE MANUEL)
     # ----------------------------------------------------
     with t_conf:
         st.header("⚙️ Config")
         c_s, c_m = st.columns(2)
         with c_s:
-            st.subheader("Paliers")
+            st.subheader("Paliers Absences")
             st.number_input("P1", key="p1_val", value=1)
             st.text_input("Label P1", key="p1_label", value="Mail")
             st.number_input("P2", key="p2_val", value=3)
@@ -476,14 +504,20 @@ def show_manager():
             st.text_input("Label P3", key="p3_label", value="RDV")
         
         with c_m:
-            st.subheader("Messages")
+            st.subheader("Messages Types")
             if st.button("🔄 Restaurer les modèles par défaut"):
                 st.session_state.msg_tpl = "Bonjour {prenom},\n\nSauf erreur de notre part, nous avons relevé les absences suivantes :\n{details}\n\nMerci de confirmer votre présence."
                 st.session_state.msg_p3_tpl = "Bonjour {prenom},\n\nSuite à de nombreuses absences ({details}), merci de passer à l'accueil."
+                st.session_state.msg_manual_tpl = "Bonjour {nom},\n\nVous avez participé au cours de {cours} le {date} sans inscription.\n\nMerci de vous rapprocher de l'accueil pour régulariser votre compte et vous inscrire via l'application la prochaine fois."
                 st.rerun()
 
-            st.text_area("Msg P1", key="msg_tpl", height=150)
-            st.text_area("Msg P3", key="msg_p3_tpl", height=150)
+            st.text_area("Msg Absences (Mail)", key="msg_tpl", height=100)
+            st.text_area("Msg Convocation", key="msg_p3_tpl", height=100)
+            
+            st.markdown("**👇 Nouveau : Message Non-Inscrits**")
+            # Valeur par défaut si vide
+            tpl_def_man = "Bonjour {nom},\n\nVous avez participé au cours de {cours} le {date} sans inscription.\n\nMerci de vous rapprocher de l'accueil pour régulariser votre compte et vous inscrire via l'application la prochaine fois."
+            st.text_area("Msg Non-Inscrits", key="msg_manual_tpl", value=st.session_state.get("msg_manual_tpl", tpl_def_man), height=150)
         
         if st.button("Sauvegarder Config"): st.success("OK")
 
@@ -554,7 +588,6 @@ def show_manager():
                             st.success("Base vidée.")
                             st.rerun()
                     except Exception as e: st.error(f"Erreur : {e}")
-
 # =======================
 # 6. ROUTER
 # =======================
