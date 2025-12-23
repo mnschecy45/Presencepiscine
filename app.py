@@ -442,14 +442,25 @@ def show_manager():
             st.text_input("Label P2", key="p2_label", value="Tel")
             st.number_input("P3", key="p3_val", value=5)
             st.text_input("Label P3", key="p3_label", value="RDV")
+        
         with c_m:
             st.subheader("Messages")
+            
+            # Templates complets
             tpl_def_p1 = "Bonjour {prenom},\n\nSauf erreur de notre part, nous avons relevé les absences suivantes :\n{details}\n\nMerci de confirmer votre présence."
             tpl_def_p3 = "Bonjour {prenom},\n\nSuite à de nombreuses absences ({details}), merci de passer à l'accueil."
+            
+            # BOUTON MAGIQUE DE RESTAURATION
+            if st.button("🔄 Restaurer les modèles par défaut"):
+                st.session_state.msg_tpl = tpl_def_p1
+                st.session_state.msg_p3_tpl = tpl_def_p3
+                st.rerun()
+
+            # Affichage (prend la valeur en session si elle existe, sinon le défaut)
             st.text_area("Msg P1", key="msg_tpl", value=tpl_def_p1, height=150)
             st.text_area("Msg P3", key="msg_p3_tpl", value=tpl_def_p3, height=150)
         
-        if st.button("Sauvegarder"): st.success("OK")
+        if st.button("💾 Sauvegarder Config"): st.success("OK")
 
     # ----------------------------------------------------
     # TAB 4 : MAINTENANCE (IMPORT CUSTOM)
@@ -462,14 +473,13 @@ def show_manager():
         
         with col_import:
             st.subheader("📥 Importer CSV Ancien")
-            st.info("Format spécifique : nom, prenom, heure_debut, absent...")
+            st.info("Format: nom, prenom, heure_debut, absent...")
             up_csv = st.file_uploader("Fichier CSV", type=["csv"])
             
             if up_csv:
                 if st.button("Lancer Import"):
                     try:
                         df_csv = pd.read_csv(up_csv)
-                        # On met tout en minuscule pour être sûr
                         df_csv.columns = [c.lower() for c in df_csv.columns]
                         
                         prog = st.progress(0)
@@ -485,13 +495,13 @@ def show_manager():
                             # 2. Date
                             date_val = str(row.get('date', str(date.today())))
                             
-                            # 3. Heure (heure_debut -> Heure)
+                            # 3. Heure
                             heure_val = str(row.get('heure_debut', '00h00'))
                             
                             # 4. Cours
                             cours_val = str(row.get('cours', 'Inconnu'))
                             
-                            # 5. Statut (absent = True/False)
+                            # 5. Statut
                             is_absent = str(row.get('absent', '')).lower() == 'true'
                             statut_val = "Absent" if is_absent else "Présent"
 
@@ -501,14 +511,13 @@ def show_manager():
                                 "Date": date_val,
                                 "Cours": cours_val,
                                 "Heure": heure_val,
-                                "Traite": True # On archive direct
+                                "Traite": True 
                             }
                             table.create(rec)
                             prog.progress((i + 1) / tot)
                         
                         prog.empty()
                         st.success("✅ Import réussi !")
-                        st.balloons()
                         
                     except Exception as e:
                         st.error(f"Erreur import : {e}")
