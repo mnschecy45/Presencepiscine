@@ -165,9 +165,7 @@ def show_maitre_nageur():
 # =======================
 def show_reception():
     st.title("💁 Réception")
-    if df_all.empty: 
-        st.warning("Base vide. Importez des données via le Manager.")
-        return
+    if df_all.empty: return
 
     df_w = df_all.copy()
     if "Date_dt" not in df_w.columns and "Date" in df_w.columns:
@@ -208,7 +206,6 @@ def show_reception():
                 msg_val = ""
                 btn_txt = f"✅ Action {lbl} Faite"
                 
-                # TEMPLATES
                 tpl_def_p1 = "Bonjour {prenom},\n\nSauf erreur de notre part, nous avons relevé les absences suivantes :\n{details}\n\nMerci de confirmer votre présence."
                 tpl_def_p3 = "Bonjour {prenom},\n\nSuite à de nombreuses absences ({details}), merci de passer à l'accueil."
                 tpl_p1 = st.session_state.get("msg_tpl", tpl_def_p1)
@@ -246,10 +243,9 @@ def show_reception():
             st.info("Vide")
 
 # =======================
-# 5. MANAGER (CORRIGÉ : TABS VISIBLES MEME SI VIDE)
+# 5. MANAGER
 # =======================
 def show_manager():
-    # CSS FORCE NOIR
     st.markdown("""
         <style>
         [data-testid="stMetric"] {
@@ -269,10 +265,9 @@ def show_manager():
     if st.sidebar.text_input("Mdp", type="password") != MANAGER_PASSWORD:
         st.warning("Accès refusé"); return
     
-    # --- PREPA DONNEES (Sécurisée : Pas de "stop" si vide) ---
-    df_ana = pd.DataFrame()
-    if not df_all.empty:
-        df_ana = df_all.copy()
+    # --- NETTOYAGE ---
+    df_ana = df_all.copy()
+    if not df_ana.empty:
         if "Date_dt" not in df_ana.columns and "Date" in df_ana.columns:
              df_ana["Date_dt"] = pd.to_datetime(df_ana["Date"], errors='coerce')
         df_ana = df_ana.dropna(subset=["Date_dt"])
@@ -300,24 +295,21 @@ def show_manager():
         df_ana["Semaine"] = df_ana["Date_dt"].dt.isocalendar().week
         df_ana["Cours_Complet"] = df_ana["Cours"] + " (" + df_ana["Jour"] + " " + df_ana["Heure"] + ")"
 
-    # --- TABS ---
+    mois_map = {1: "Janvier", 2: "Février", 3: "Mars", 4: "Avril", 5: "Mai", 6: "Juin",
+        7: "Juillet", 8: "Août", 9: "Septembre", 10: "Octobre", 11: "Novembre", 12: "Décembre"}
+
     t_dash, t_comp, t_conf, t_maint = st.tabs(["📊 DASHBOARD", "🚀 ANALYSE", "⚙️ CONFIG", "🛠️ MAINTENANCE"])
 
     # ----------------------------------------------------
     # TAB 1 : DASHBOARD
     # ----------------------------------------------------
     with t_dash:
-        if df_ana.empty:
-            st.info("Base vide. Allez dans l'onglet 'MAINTENANCE' pour importer vos données.")
+        if df_ana.empty: st.info("Base vide. Allez dans Maintenance."); 
         else:
             st.sidebar.header("📅 Filtres")
             yrs = sorted(df_ana["Annee"].unique(), reverse=True)
             yr = st.sidebar.selectbox("Année", yrs)
             df_yr = df_ana[df_ana["Annee"] == yr]
-
-            # DICTIONNAIRE MOIS
-            mois_map = {1: "Janvier", 2: "Février", 3: "Mars", 4: "Avril", 5: "Mai", 6: "Juin",
-                7: "Juillet", 8: "Août", 9: "Septembre", 10: "Octobre", 11: "Novembre", 12: "Décembre"}
 
             vue = st.sidebar.radio("Vue", ["Mois", "Semaine"])
             if vue == "Mois":
@@ -353,22 +345,34 @@ def show_manager():
             st.divider()
             g1, g2 = st.columns(2)
             with g1:
-                st.subheader("🔥 Top Cours")
+                st.subheader("🔥 Top Cours (Présence)")
                 if not df_filt.empty:
                     tc = df_filt[df_filt["Statut"]=="Présent"]["Cours_Complet"].value_counts().head(10)
                     st.bar_chart(tc)
             with g2:
-                st.subheader("📅 Par Jour")
+                # NOUVEAU GRAPHIQUE DES ABSENCES
+                st.subheader("📉 Top Cours (Absences)")
                 if not df_filt.empty:
-                    sem_counts = df_filt[df_filt["Statut"]=="Présent"].groupby("Jour").size()
-                    ordre_jours = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
-                    sem_df = pd.DataFrame(sem_counts).reindex(ordre_jours, fill_value=0).reset_index()
-                    sem_df.columns = ["Jour", "Nombre"]
-                    chart_j = alt.Chart(sem_df).mark_bar(color="#76b900").encode(
-                        x=alt.X('Jour', sort=ordre_jours, title=None),
-                        y=alt.Y('Nombre', title=None)
-                    )
-                    st.altair_chart(chart_j, use_container_width=True)
+                    # On filtre que les absents
+                    df_abs = df_filt[df_filt["Statut"]=="Absent"]
+                    if not df_abs.empty:
+                        tc_abs = df_abs["Cours_Complet"].value_counts().head(10)
+                        st.bar_chart(tc_abs, color="#ff4b4b") # Rouge
+                    else:
+                        st.success("Aucune absence sur cette période.")
+
+            st.write("---")
+            st.subheader("📅 Par Jour")
+            if not df_filt.empty:
+                sem_counts = df_filt[df_filt["Statut"]=="Présent"].groupby("Jour").size()
+                ordre_jours = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
+                sem_df = pd.DataFrame(sem_counts).reindex(ordre_jours, fill_value=0).reset_index()
+                sem_df.columns = ["Jour", "Nombre"]
+                chart_j = alt.Chart(sem_df).mark_bar(color="#76b900").encode(
+                    x=alt.X('Jour', sort=ordre_jours, title=None),
+                    y=alt.Y('Nombre', title=None)
+                )
+                st.altair_chart(chart_j, use_container_width=True)
 
             st.divider()
             st.subheader("📋 Détails Créneaux")
@@ -449,7 +453,6 @@ def show_manager():
         
         with c_m:
             st.subheader("Messages")
-            # RESTORE BUTTON
             if st.button("🔄 Restaurer les modèles par défaut"):
                 st.session_state.msg_tpl = "Bonjour {prenom},\n\nSauf erreur de notre part, nous avons relevé les absences suivantes :\n{details}\n\nMerci de confirmer votre présence."
                 st.session_state.msg_p3_tpl = "Bonjour {prenom},\n\nSuite à de nombreuses absences ({details}), merci de passer à l'accueil."
@@ -482,12 +485,11 @@ def show_manager():
                         prog = st.progress(0)
                         tot = len(df_csv)
                         for i, row in df_csv.iterrows():
-                            # 1. Nom complet
+                            # 1. Nom
                             nom_brut = str(row.get('nom', '')).upper()
                             prenom_brut = str(row.get('prenom', ''))
                             nom_complet = f"{nom_brut} {prenom_brut}".strip() or "Inconnu"
-                            
-                            # 2. Champs
+                            # 2. Date
                             date_val = str(row.get('date', str(date.today())))
                             heure_val = str(row.get('heure_debut', '00h00'))
                             cours_val = str(row.get('cours', 'Inconnu'))
