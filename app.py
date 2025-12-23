@@ -179,31 +179,36 @@ def show_maitre_nageur():
                 st.rerun()
 
 # =======================
-# 4. RÉCEPTION (AVEC GESTION DES MANUELS)
+# 4. RÉCEPTION (CORRIGÉ - BUG FIX PRENOM)
 # =======================
 def show_reception():
     st.title("💁 Réception")
     if df_all.empty: return
 
     df_w = df_all.copy()
+    
+    # --- CORRECTION DU BUG ICI ---
+    # On s'assure que les colonnes existent même si Airtable ne les renvoie pas
     if "Date_dt" not in df_w.columns and "Date" in df_w.columns:
          df_w["Date_dt"] = pd.to_datetime(df_w["Date"], errors='coerce')
     if "Traite" not in df_w.columns: df_w["Traite"] = False
+    if "Prenom" not in df_w.columns: df_w["Prenom"] = "" # <--- C'est cette ligne qui manquait !
+    # -----------------------------
 
-    # On crée 3 onglets maintenant
     t1, t2, t3 = st.tabs(["⚡ ABSENCES", "⚠️ NON INSCRITS", "✅ HISTORIQUE"])
 
-    # --- ONGLET 1 : ABSENCES (Classique) ---
+    # --- ONGLET 1 : ABSENCES ---
     with t1:
         # On ne prend que les Absents qui ne sont PAS des ajouts manuels
+        # Maintenant que la colonne Prenom est forcée, ça ne plantera plus
         todo = df_w[(df_w["Statut"] == "Absent") & (df_w["Traite"] != True) & (df_w["Prenom"] != "(Manuel)")]
+        
         if todo.empty:
             st.success("Aucune absence à traiter.")
         else:
             st.write(f"**{len(todo)} absences en attente**")
             cli = st.selectbox("Client (Absent)", todo["Nom"].unique())
             if cli:
-                # ... (Le code de calcul des niveaux d'absence reste le même) ...
                 tot_abs = len(df_w[(df_w["Nom"] == cli) & (df_w["Statut"] == "Absent")])
                 s1 = st.session_state.get("p1_val", 1); s2 = st.session_state.get("p2_val", 3); s3 = st.session_state.get("p3_val", 5)
                 l1 = st.session_state.get("p1_label", "Mail"); l2 = st.session_state.get("p2_label", "Tel"); l3 = st.session_state.get("p3_label", "RDV")
@@ -216,10 +221,8 @@ def show_reception():
                 st.markdown(f"### {color} NIVEAU {niv} - {lbl} ({tot_abs} abs)")
 
                 sub = todo[todo["Nom"] == cli].sort_values("Date_dt", ascending=False)
-                # Récupération des IDs pour mise à jour
                 ids = sub['id'].tolist()
                 
-                # Génération du texte
                 txts = [f"- {r.get('Cours','?')} le {r['Date_dt'].strftime('%d/%m')}" for _, r in sub.iterrows()]
                 det = "\n".join(txts)
                 
@@ -237,31 +240,25 @@ def show_reception():
                     st.success("Traité !")
                     st.rerun()
 
-    # --- ONGLET 2 : NON INSCRITS (Nouveau !) ---
+    # --- ONGLET 2 : NON INSCRITS ---
     with t2:
-        # On cherche ceux dont le prénom est "(Manuel)" et qui ne sont pas traités
         manuels = df_w[(df_w["Prenom"] == "(Manuel)") & (df_w["Traite"] != True)]
         
         if manuels.empty:
             st.success("Aucun dossier non-inscrit.")
         else:
             st.warning(f"**{len(manuels)} personnes venues sans inscription**")
-            
-            # Sélection du client manuel
             cli_man = st.selectbox("Client (Non Inscrit)", manuels["Nom"].unique())
             
             if cli_man:
-                # On récupère les lignes concernées
                 sub_m = manuels[manuels["Nom"] == cli_man]
                 ids_m = sub_m['id'].tolist()
                 
-                # Infos pour le message
                 last_cours = sub_m.iloc[0]["Cours"]
                 last_date = sub_m.iloc[0]["Date_dt"].strftime("%d/%m") if pd.notnull(sub_m.iloc[0]["Date_dt"]) else "?"
                 
                 st.info(f"Dernier passage : {last_cours} le {last_date}")
 
-                # Récupération du modèle de message défini dans le Manager
                 tpl_def_man = "Bonjour {nom},\n\nVous avez participé au cours de {cours} le {date} sans inscription.\nMerci de passer à l'accueil."
                 tpl_man = st.session_state.get("msg_manual_tpl", tpl_def_man)
                 
@@ -278,10 +275,8 @@ def show_reception():
                     st.success("Dossier régularisé !")
                     st.rerun()
 
-    # --- ONGLET 3 : HISTORIQUE (Tout confondu) ---
+    # --- ONGLET 3 : HISTORIQUE ---
     with t3:
-        # On affiche l'historique des Absents traités ET des Manuels traités
-        # Condition : (Statut=Absent OU Prenom=(Manuel)) ET Traite=True
         done = df_w[((df_w["Statut"] == "Absent") | (df_w["Prenom"] == "(Manuel)")) & (df_w["Traite"] == True)]
         
         if not done.empty:
@@ -292,7 +287,6 @@ def show_reception():
                 done["Date_Traitement"] = done["Date_Traitement"].dt.strftime("%d/%m/%Y %H:%M")
                 cols.append("Date_Traitement")
             
-            # On colore le statut pour distinguer visuellement
             st.dataframe(done[cols], use_container_width=True)
         else:
             st.info("Historique vide")
