@@ -165,7 +165,9 @@ def show_maitre_nageur():
 # =======================
 def show_reception():
     st.title("💁 Réception")
-    if df_all.empty: return
+    if df_all.empty: 
+        st.warning("Base vide. Importez des données via le Manager.")
+        return
 
     df_w = df_all.copy()
     if "Date_dt" not in df_w.columns and "Date" in df_w.columns:
@@ -244,7 +246,7 @@ def show_reception():
             st.info("Vide")
 
 # =======================
-# 5. MANAGER
+# 5. MANAGER (CORRIGÉ : TABS VISIBLES MEME SI VIDE)
 # =======================
 def show_manager():
     # CSS FORCE NOIR
@@ -267,9 +269,10 @@ def show_manager():
     if st.sidebar.text_input("Mdp", type="password") != MANAGER_PASSWORD:
         st.warning("Accès refusé"); return
     
-    # --- NETTOYAGE ---
-    df_ana = df_all.copy()
-    if not df_ana.empty:
+    # --- PREPA DONNEES (Sécurisée : Pas de "stop" si vide) ---
+    df_ana = pd.DataFrame()
+    if not df_all.empty:
+        df_ana = df_all.copy()
         if "Date_dt" not in df_ana.columns and "Date" in df_ana.columns:
              df_ana["Date_dt"] = pd.to_datetime(df_ana["Date"], errors='coerce')
         df_ana = df_ana.dropna(subset=["Date_dt"])
@@ -297,10 +300,6 @@ def show_manager():
         df_ana["Semaine"] = df_ana["Date_dt"].dt.isocalendar().week
         df_ana["Cours_Complet"] = df_ana["Cours"] + " (" + df_ana["Jour"] + " " + df_ana["Heure"] + ")"
 
-    # --- MOIS DICT ---
-    mois_map = {1: "Janvier", 2: "Février", 3: "Mars", 4: "Avril", 5: "Mai", 6: "Juin",
-        7: "Juillet", 8: "Août", 9: "Septembre", 10: "Octobre", 11: "Novembre", 12: "Décembre"}
-
     # --- TABS ---
     t_dash, t_comp, t_conf, t_maint = st.tabs(["📊 DASHBOARD", "🚀 ANALYSE", "⚙️ CONFIG", "🛠️ MAINTENANCE"])
 
@@ -308,125 +307,130 @@ def show_manager():
     # TAB 1 : DASHBOARD
     # ----------------------------------------------------
     with t_dash:
-        if df_ana.empty: st.warning("Pas de données"); st.stop()
-        
-        st.sidebar.header("📅 Filtres")
-        yrs = sorted(df_ana["Annee"].unique(), reverse=True)
-        yr = st.sidebar.selectbox("Année", yrs)
-        df_yr = df_ana[df_ana["Annee"] == yr]
-
-        vue = st.sidebar.radio("Vue", ["Mois", "Semaine"])
-        if vue == "Mois":
-            mths_nums = sorted(df_yr["Mois"].unique())
-            mths_names = ["TOUS"] + [mois_map.get(m, str(m)) for m in mths_nums]
-            ms = st.sidebar.selectbox("Mois", mths_names)
-            if ms == "TOUS": df_filt = df_yr.copy()
-            else:
-                choix_num = [k for k, v in mois_map.items() if v == ms][0]
-                df_filt = df_yr[df_yr["Mois"] == choix_num].copy()
+        if df_ana.empty:
+            st.info("Base vide. Allez dans l'onglet 'MAINTENANCE' pour importer vos données.")
         else:
-            sems = sorted(df_yr["Semaine"].unique())
-            sl = [f"Semaine {s}" for s in sems]
-            ss = st.sidebar.selectbox("Semaine", sl)
-            df_filt = df_yr[df_yr["Semaine"] == int(ss.split()[1])].copy()
+            st.sidebar.header("📅 Filtres")
+            yrs = sorted(df_ana["Annee"].unique(), reverse=True)
+            yr = st.sidebar.selectbox("Année", yrs)
+            df_yr = df_ana[df_ana["Annee"] == yr]
 
-        tot = len(df_filt)
-        pres = len(df_filt[df_filt["Statut"]=="Présent"])
-        absent = len(df_filt[df_filt["Statut"]=="Absent"])
-        taux = (pres/tot*100) if tot>0 else 0
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Inscrits", tot)
-        c2.metric("Présents", pres, f"{taux:.1f}%")
-        c3.metric("Absents", absent, delta_color="inverse")
-        
-        st.divider()
-        st.subheader("📈 Fréquentation")
-        if not df_filt.empty:
-            da = df_filt[df_filt["Statut"]=="Présent"].groupby("Date_dt").size()
-            da.index = da.index.strftime("%d/%m")
-            st.area_chart(da, color="#3b82f6")
-        
-        st.divider()
-        g1, g2 = st.columns(2)
-        with g1:
-            st.subheader("🔥 Top Cours")
-            if not df_filt.empty:
-                tc = df_filt[df_filt["Statut"]=="Présent"]["Cours_Complet"].value_counts().head(10)
-                st.bar_chart(tc)
-        with g2:
-            st.subheader("📅 Par Jour")
-            if not df_filt.empty:
-                sem_counts = df_filt[df_filt["Statut"]=="Présent"].groupby("Jour").size()
-                ordre_jours = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
-                sem_df = pd.DataFrame(sem_counts).reindex(ordre_jours, fill_value=0).reset_index()
-                sem_df.columns = ["Jour", "Nombre"]
-                chart_j = alt.Chart(sem_df).mark_bar(color="#76b900").encode(
-                    x=alt.X('Jour', sort=ordre_jours, title=None),
-                    y=alt.Y('Nombre', title=None)
-                )
-                st.altair_chart(chart_j, use_container_width=True)
+            # DICTIONNAIRE MOIS
+            mois_map = {1: "Janvier", 2: "Février", 3: "Mars", 4: "Avril", 5: "Mai", 6: "Juin",
+                7: "Juillet", 8: "Août", 9: "Septembre", 10: "Octobre", 11: "Novembre", 12: "Décembre"}
 
-        st.divider()
-        st.subheader("📋 Détails Créneaux")
-        if not df_filt.empty:
-            synt = df_filt.groupby(["Jour_Num", "Jour", "Heure", "Cours"]).agg(
-                Inscrits=('Nom', 'count'),
-                Presents=('Statut', lambda x: (x=='Présent').sum())
-            ).reset_index()
-            synt["Taux %"] = (synt["Presents"]/synt["Inscrits"]*100).round(1)
-            synt.sort_values(["Jour_Num", "Heure"], inplace=True)
-            st.dataframe(synt[["Jour", "Heure", "Cours", "Inscrits", "Presents", "Taux %"]], use_container_width=True, hide_index=True)
+            vue = st.sidebar.radio("Vue", ["Mois", "Semaine"])
+            if vue == "Mois":
+                mths_nums = sorted(df_yr["Mois"].unique())
+                mths_names = ["TOUS"] + [mois_map.get(m, str(m)) for m in mths_nums]
+                ms = st.sidebar.selectbox("Mois", mths_names)
+                if ms == "TOUS": df_filt = df_yr.copy()
+                else:
+                    choix_num = [k for k, v in mois_map.items() if v == ms][0]
+                    df_filt = df_yr[df_yr["Mois"] == choix_num].copy()
+            else:
+                sems = sorted(df_yr["Semaine"].unique())
+                sl = [f"Semaine {s}" for s in sems]
+                ss = st.sidebar.selectbox("Semaine", sl)
+                df_filt = df_yr[df_yr["Semaine"] == int(ss.split()[1])].copy()
+
+            tot = len(df_filt)
+            pres = len(df_filt[df_filt["Statut"]=="Présent"])
+            absent = len(df_filt[df_filt["Statut"]=="Absent"])
+            taux = (pres/tot*100) if tot>0 else 0
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Inscrits", tot)
+            c2.metric("Présents", pres, f"{taux:.1f}%")
+            c3.metric("Absents", absent, delta_color="inverse")
             
-        st.divider()
-        k1, k2 = st.columns(2)
-        with k1:
-            st.subheader("🚨 Top Absents")
+            st.divider()
+            st.subheader("📈 Fréquentation")
             if not df_filt.empty:
-                ta = df_filt[df_filt["Statut"]=="Absent"]["Nom"].value_counts().head(10).reset_index(name="Abs")
-                st.dataframe(ta, use_container_width=True, hide_index=True)
-        with k2:
-            st.subheader("🏆 Top Assidus")
+                da = df_filt[df_filt["Statut"]=="Présent"].groupby("Date_dt").size()
+                da.index = da.index.strftime("%d/%m")
+                st.area_chart(da, color="#3b82f6")
+            
+            st.divider()
+            g1, g2 = st.columns(2)
+            with g1:
+                st.subheader("🔥 Top Cours")
+                if not df_filt.empty:
+                    tc = df_filt[df_filt["Statut"]=="Présent"]["Cours_Complet"].value_counts().head(10)
+                    st.bar_chart(tc)
+            with g2:
+                st.subheader("📅 Par Jour")
+                if not df_filt.empty:
+                    sem_counts = df_filt[df_filt["Statut"]=="Présent"].groupby("Jour").size()
+                    ordre_jours = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
+                    sem_df = pd.DataFrame(sem_counts).reindex(ordre_jours, fill_value=0).reset_index()
+                    sem_df.columns = ["Jour", "Nombre"]
+                    chart_j = alt.Chart(sem_df).mark_bar(color="#76b900").encode(
+                        x=alt.X('Jour', sort=ordre_jours, title=None),
+                        y=alt.Y('Nombre', title=None)
+                    )
+                    st.altair_chart(chart_j, use_container_width=True)
+
+            st.divider()
+            st.subheader("📋 Détails Créneaux")
             if not df_filt.empty:
-                tp = df_filt[df_filt["Statut"]=="Présent"]["Nom"].value_counts().head(10).reset_index(name="Pres")
-                st.dataframe(tp, use_container_width=True, hide_index=True)
+                synt = df_filt.groupby(["Jour_Num", "Jour", "Heure", "Cours"]).agg(
+                    Inscrits=('Nom', 'count'),
+                    Presents=('Statut', lambda x: (x=='Présent').sum())
+                ).reset_index()
+                synt["Taux %"] = (synt["Presents"]/synt["Inscrits"]*100).round(1)
+                synt.sort_values(["Jour_Num", "Heure"], inplace=True)
+                st.dataframe(synt[["Jour", "Heure", "Cours", "Inscrits", "Presents", "Taux %"]], use_container_width=True, hide_index=True)
+                
+            st.divider()
+            k1, k2 = st.columns(2)
+            with k1:
+                st.subheader("🚨 Top Absents")
+                if not df_filt.empty:
+                    ta = df_filt[df_filt["Statut"]=="Absent"]["Nom"].value_counts().head(10).reset_index(name="Abs")
+                    st.dataframe(ta, use_container_width=True, hide_index=True)
+            with k2:
+                st.subheader("🏆 Top Assidus")
+                if not df_filt.empty:
+                    tp = df_filt[df_filt["Statut"]=="Présent"]["Nom"].value_counts().head(10).reset_index(name="Pres")
+                    st.dataframe(tp, use_container_width=True, hide_index=True)
 
     # ----------------------------------------------------
     # TAB 2 : ANALYSE
     # ----------------------------------------------------
     with t_comp:
-        if df_ana.empty: st.warning("Pas de données"); st.stop()
-        
-        st.info("📊 Suivez la tendance.")
-        ct1, ct2 = st.tabs(["📉 Évolution Cours", "🆚 Comparateur Périodes"])
-        
-        with ct1:
-            liste_cours = sorted([str(c) for c in df_ana["Cours_Complet"].unique() if str(c) != "nan" and str(c) != "Inconnu"])
-            c_choix = st.selectbox("Choisir un cours :", liste_cours)
-            if c_choix:
-                sub_c = df_ana[df_ana["Cours_Complet"] == c_choix].groupby("Date_dt").size()
-                st.line_chart(sub_c)
-        
-        with ct2:
-            if vue == "Semaine":
-                l_s = sorted(df_ana["Semaine"].unique())
-                sa = st.selectbox("Sem A", l_s, index=0)
-                sb = st.selectbox("Sem B", l_s, index=len(l_s)-1 if len(l_s)>0 else 0)
-                da = df_ana[df_ana["Semaine"]==sa]; db = df_ana[df_ana["Semaine"]==sb]
-                la = f"Sem {sa}"; lb = f"Sem {sb}"
-            else:
-                l_m_nums = sorted(df_ana["Mois"].unique())
-                l_m_names = [mois_map.get(m, str(m)) for m in l_m_nums]
-                ma_txt = st.selectbox("Mois A", l_m_names, index=0)
-                mb_txt = st.selectbox("Mois B", l_m_names, index=len(l_m_names)-1 if len(l_m_names)>0 else 0)
-                ma_num = [k for k, v in mois_map.items() if v == ma_txt][0]
-                mb_num = [k for k, v in mois_map.items() if v == mb_txt][0]
-                da = df_ana[df_ana["Mois"]==ma_num]; db = df_ana[df_ana["Mois"]==mb_num]
-                la = f"{ma_txt}"; lb = f"{mb_txt}"
+        if df_ana.empty: st.info("Base vide. Allez dans Maintenance."); 
+        else:
+            st.info("📊 Suivez la tendance.")
+            ct1, ct2 = st.tabs(["📉 Évolution Cours", "🆚 Comparateur Périodes"])
             
-            pa = len(da[da["Statut"]=="Présent"]); pb = len(db[db["Statut"]=="Présent"])
-            c1, c2 = st.columns(2)
-            c1.metric(f"Présents {la}", pa)
-            c2.metric(f"Présents {lb}", pb, delta=pb-pa)
+            with ct1:
+                liste_cours = sorted([str(c) for c in df_ana["Cours_Complet"].unique() if str(c) != "nan" and str(c) != "Inconnu"])
+                c_choix = st.selectbox("Choisir un cours :", liste_cours)
+                if c_choix:
+                    sub_c = df_ana[df_ana["Cours_Complet"] == c_choix].groupby("Date_dt").size()
+                    st.line_chart(sub_c)
+            
+            with ct2:
+                if vue == "Semaine":
+                    l_s = sorted(df_ana["Semaine"].unique())
+                    sa = st.selectbox("Sem A", l_s, index=0)
+                    sb = st.selectbox("Sem B", l_s, index=len(l_s)-1 if len(l_s)>0 else 0)
+                    da = df_ana[df_ana["Semaine"]==sa]; db = df_ana[df_ana["Semaine"]==sb]
+                    la = f"Sem {sa}"; lb = f"Sem {sb}"
+                else:
+                    l_m_nums = sorted(df_ana["Mois"].unique())
+                    l_m_names = [mois_map.get(m, str(m)) for m in l_m_nums]
+                    ma_txt = st.selectbox("Mois A", l_m_names, index=0)
+                    mb_txt = st.selectbox("Mois B", l_m_names, index=len(l_m_names)-1 if len(l_m_names)>0 else 0)
+                    ma_num = [k for k, v in mois_map.items() if v == ma_txt][0]
+                    mb_num = [k for k, v in mois_map.items() if v == mb_txt][0]
+                    da = df_ana[df_ana["Mois"]==ma_num]; db = df_ana[df_ana["Mois"]==mb_num]
+                    la = f"{ma_txt}"; lb = f"{mb_txt}"
+                
+                pa = len(da[da["Statut"]=="Présent"]); pb = len(db[db["Statut"]=="Présent"])
+                c1, c2 = st.columns(2)
+                c1.metric(f"Présents {la}", pa)
+                c2.metric(f"Présents {lb}", pb, delta=pb-pa)
 
     # ----------------------------------------------------
     # TAB 3 : CONFIG
@@ -445,25 +449,19 @@ def show_manager():
         
         with c_m:
             st.subheader("Messages")
-            
-            # Templates complets
-            tpl_def_p1 = "Bonjour {prenom},\n\nSauf erreur de notre part, nous avons relevé les absences suivantes :\n{details}\n\nMerci de confirmer votre présence."
-            tpl_def_p3 = "Bonjour {prenom},\n\nSuite à de nombreuses absences ({details}), merci de passer à l'accueil."
-            
-            # BOUTON MAGIQUE DE RESTAURATION
+            # RESTORE BUTTON
             if st.button("🔄 Restaurer les modèles par défaut"):
-                st.session_state.msg_tpl = tpl_def_p1
-                st.session_state.msg_p3_tpl = tpl_def_p3
+                st.session_state.msg_tpl = "Bonjour {prenom},\n\nSauf erreur de notre part, nous avons relevé les absences suivantes :\n{details}\n\nMerci de confirmer votre présence."
+                st.session_state.msg_p3_tpl = "Bonjour {prenom},\n\nSuite à de nombreuses absences ({details}), merci de passer à l'accueil."
                 st.rerun()
 
-            # Affichage (prend la valeur en session si elle existe, sinon le défaut)
-            st.text_area("Msg P1", key="msg_tpl", value=tpl_def_p1, height=150)
-            st.text_area("Msg P3", key="msg_p3_tpl", value=tpl_def_p3, height=150)
+            st.text_area("Msg P1", key="msg_tpl", height=150)
+            st.text_area("Msg P3", key="msg_p3_tpl", height=150)
         
-        if st.button("💾 Sauvegarder Config"): st.success("OK")
+        if st.button("Sauvegarder Config"): st.success("OK")
 
     # ----------------------------------------------------
-    # TAB 4 : MAINTENANCE (IMPORT CUSTOM)
+    # TAB 4 : MAINTENANCE
     # ----------------------------------------------------
     with t_maint:
         st.header("🛠️ Maintenance")
@@ -472,7 +470,7 @@ def show_manager():
         col_import, col_reset = st.columns(2)
         
         with col_import:
-            st.subheader("📥 Importer CSV Ancien")
+            st.subheader("📥 Importer CSV")
             st.info("Format: nom, prenom, heure_debut, absent...")
             up_csv = st.file_uploader("Fichier CSV", type=["csv"])
             
@@ -481,27 +479,18 @@ def show_manager():
                     try:
                         df_csv = pd.read_csv(up_csv)
                         df_csv.columns = [c.lower() for c in df_csv.columns]
-                        
                         prog = st.progress(0)
                         tot = len(df_csv)
-                        
                         for i, row in df_csv.iterrows():
-                            # 1. On recolle Nom + Prénom
+                            # 1. Nom complet
                             nom_brut = str(row.get('nom', '')).upper()
                             prenom_brut = str(row.get('prenom', ''))
-                            nom_complet = f"{nom_brut} {prenom_brut}".strip()
-                            if not nom_complet: nom_complet = "Inconnu"
-
-                            # 2. Date
+                            nom_complet = f"{nom_brut} {prenom_brut}".strip() or "Inconnu"
+                            
+                            # 2. Champs
                             date_val = str(row.get('date', str(date.today())))
-                            
-                            # 3. Heure
                             heure_val = str(row.get('heure_debut', '00h00'))
-                            
-                            # 4. Cours
                             cours_val = str(row.get('cours', 'Inconnu'))
-                            
-                            # 5. Statut
                             is_absent = str(row.get('absent', '')).lower() == 'true'
                             statut_val = "Absent" if is_absent else "Présent"
 
@@ -515,10 +504,9 @@ def show_manager():
                             }
                             table.create(rec)
                             prog.progress((i + 1) / tot)
-                        
                         prog.empty()
                         st.success("✅ Import réussi !")
-                        
+                        st.rerun()
                     except Exception as e:
                         st.error(f"Erreur import : {e}")
 
