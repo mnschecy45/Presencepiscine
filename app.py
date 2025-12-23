@@ -271,7 +271,7 @@ def show_reception():
             st.info("Vide.")
 
 # =======================
-# 5. MANAGER (Pilotage & Semaine)
+# 5. MANAGER (Pilotage, Semaine, Comparateur)
 # =======================
 def show_manager():
     st.markdown("""
@@ -317,42 +317,40 @@ def show_manager():
     jours = {0:"Lundi", 1:"Mardi", 2:"Mercredi", 3:"Jeudi", 4:"Vendredi", 5:"Samedi", 6:"Dimanche"}
     df_ana["Jour"] = df_ana["Date_dt"].dt.dayofweek.map(jours)
     df_ana["Jour_Num"] = df_ana["Date_dt"].dt.dayofweek
-
-    # --- NOUVEAUX FILTRES (SEMAINE vs MOIS) ---
-    st.sidebar.header("📅 Filtres")
-    yrs = sorted(df_ana["Annee"].unique(), reverse=True)
-    yr = st.sidebar.selectbox("Année", yrs)
-    df_yr = df_ana[df_ana["Annee"] == yr]
     
-    # Choix du Type de Vue
-    vue_type = st.sidebar.radio("Type de vue", ["Par Mois", "Par Semaine"])
-    
-    if vue_type == "Par Mois":
-        mths = sorted(df_yr["Mois"].unique())
-        m_list = ["TOUS"] + [pd.to_datetime(f"2022-{m}-01").strftime("%B") for m in mths]
-        m_sel = st.sidebar.selectbox("Choisir le Mois", m_list)
-        
-        if m_sel == "TOUS": df_filt = df_yr.copy()
-        else:
-            m_idx = mths[m_list.index(m_sel)-1]
-            df_filt = df_yr[df_yr["Mois"] == m_idx].copy()
-    else:
-        # Vue Par Semaine
-        sems = sorted(df_yr["Semaine"].unique())
-        # Affichage plus joli "Semaine 44", "Semaine 45"...
-        s_list = [f"Semaine {s}" for s in sems]
-        s_sel = st.sidebar.selectbox("Choisir la Semaine", s_list)
-        
-        # On récupère le numéro
-        sem_num = int(s_sel.split(" ")[1])
-        df_filt = df_yr[df_yr["Semaine"] == sem_num].copy()
+    # Étiquette Unique pour Comparaison (Cours + Jour + Heure)
+    df_ana["Cours_Complet"] = df_ana["Cours"] + " (" + df_ana["Jour"] + " " + df_ana["Heure"] + ")"
 
-    df_filt["Cours_Complet"] = df_filt["Cours"] + " (" + df_filt["Jour"] + " " + df_filt["Heure"] + ")"
-
-    # --- DASHBOARD ---
-    tab1, tab2 = st.tabs(["📊 STATISTIQUES", "⚙️ CONFIGURATION"])
+    # ==========================
+    # ONGLETS PRINCIPAUX
+    # ==========================
+    tab1, tab_comp, tab2 = st.tabs(["📊 DASHBOARD", "🚀 ÉVOLUTION & COMPARATEUR", "⚙️ CONFIGURATION"])
     
+    # --- TAB 1 : DASHBOARD (Avec Filtres Sidebar) ---
     with tab1:
+        st.sidebar.header("📅 Filtres Dashboard")
+        yrs = sorted(df_ana["Annee"].unique(), reverse=True)
+        yr = st.sidebar.selectbox("Année", yrs)
+        df_yr = df_ana[df_ana["Annee"] == yr]
+        
+        vue_type = st.sidebar.radio("Type de vue", ["Par Mois", "Par Semaine"])
+        
+        if vue_type == "Par Mois":
+            mths = sorted(df_yr["Mois"].unique())
+            m_list = ["TOUS"] + [pd.to_datetime(f"2022-{m}-01").strftime("%B") for m in mths]
+            m_sel = st.sidebar.selectbox("Choisir le Mois", m_list)
+            if m_sel == "TOUS": df_filt = df_yr.copy()
+            else:
+                m_idx = mths[m_list.index(m_sel)-1]
+                df_filt = df_yr[df_yr["Mois"] == m_idx].copy()
+        else:
+            sems = sorted(df_yr["Semaine"].unique())
+            s_list = [f"Semaine {s}" for s in sems]
+            s_sel = st.sidebar.selectbox("Choisir la Semaine", s_list)
+            sem_num = int(s_sel.split(" ")[1])
+            df_filt = df_yr[df_yr["Semaine"] == sem_num].copy()
+
+        # KPIs
         tot = len(df_filt)
         pres = len(df_filt[df_filt["Statut"]=="Présent"])
         absent = len(df_filt[df_filt["Statut"]=="Absent"])
@@ -364,33 +362,27 @@ def show_manager():
         c3.metric("Absents", absent, delta_color="inverse")
         
         st.write("---")
-        
         st.subheader("📈 Évolution de la Fréquentation")
         if not df_filt.empty:
             daily = df_filt[df_filt["Statut"] == "Présent"].groupby("Date_dt").size()
             st.area_chart(daily, color="#3b82f6")
         
         st.write("---")
-
         c_g1, c_g2 = st.columns(2)
         with c_g1:
             st.subheader("🔥 Top Cours")
             if not df_filt.empty:
                 top_data = df_filt[df_filt["Statut"]=="Présent"]["Cours_Complet"].value_counts().head(10)
                 st.bar_chart(top_data)
-        
         with c_g2:
             st.subheader("📅 Affluence par Jour")
             if not df_filt.empty:
-                # CORRECTION DE L'ORDRE DES JOURS ICI
                 sem = df_filt[df_filt["Statut"]=="Présent"].groupby("Jour").size()
                 ordre_imposé = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
-                # On force l'index pour respecter l'ordre Lundi -> Dimanche
                 sem = sem.reindex(ordre_imposé, fill_value=0)
                 st.bar_chart(sem, color="#76b900")
         
         st.write("---")
-
         st.subheader("📋 Détails par Créneau")
         if not df_filt.empty:
             synt = df_filt.groupby(["Jour_Num", "Jour", "Heure", "Cours"]).agg(
@@ -402,7 +394,6 @@ def show_manager():
             st.dataframe(synt[["Jour", "Heure", "Cours", "Inscrits", "Presents", "Taux %"]], use_container_width=True, hide_index=True)
 
         st.write("---")
-
         c_top1, c_top2 = st.columns(2)
         with c_top1:
             st.subheader("🚨 Top 10 Absents")
@@ -410,7 +401,6 @@ def show_manager():
                 top_abs = df_filt[df_filt["Statut"]=="Absent"]["Nom"].value_counts().head(10).reset_index()
                 top_abs.columns = ["Nom", "Nb Absences"]
                 st.dataframe(top_abs, use_container_width=True, hide_index=True)
-
         with c_top2:
             st.subheader("🏆 Top 10 Assidus")
             if not df_filt.empty:
@@ -418,6 +408,104 @@ def show_manager():
                 top_pres.columns = ["Nom", "Nb Présences"]
                 st.dataframe(top_pres, use_container_width=True, hide_index=True)
 
+    # --- TAB 2 : EVOLUTION & COMPARATEUR (LE NOUVEAU JOUET) ---
+    with tab_comp:
+        st.header("🚀 Analyse Avancée")
+        sub_tab1, sub_tab2 = st.tabs(["📉 Suivi d'un Cours (Évolution)", "🆚 Comparateur Périodes"])
+
+        # 1. EVOLUTION D'UN COURS PRECIS
+        with sub_tab1:
+            st.info("Visualisez la courbe de vie d'un cours spécifique (ex: Est-ce que le Lundi 12h se vide ?).")
+            # Liste unique des cours (Cours + Jour + Heure)
+            liste_cours_uniques = sorted(df_ana["Cours_Complet"].unique())
+            cours_choisi = st.selectbox("Sélectionnez le cours à analyser :", liste_cours_uniques)
+            
+            if cours_choisi:
+                # On filtre les données pour ce cours précis
+                df_cours = df_ana[df_ana["Cours_Complet"] == cours_choisi].sort_values("Date_dt")
+                
+                if not df_cours.empty:
+                    # On groupe par date pour avoir le nb d'inscrits et de présents par séance
+                    evo = df_cours.groupby("Date_dt").agg(
+                        Inscrits=('Nom', 'count'),
+                        Presents=('Statut', lambda x: (x=='Présent').sum())
+                    )
+                    st.line_chart(evo)
+                    st.write("Données brutes :")
+                    st.dataframe(evo.sort_index(ascending=False), use_container_width=True)
+                else:
+                    st.warning("Pas assez de données pour ce cours.")
+
+        # 2. COMPARATEUR A vs B
+        with sub_tab2:
+            st.info("Comparez la performance de deux périodes (ex: Semaine 44 vs Semaine 45).")
+            
+            type_comp = st.radio("Comparer :", ["Deux Semaines", "Deux Mois"], horizontal=True)
+            
+            col_a, col_b = st.columns(2)
+            
+            df_A = pd.DataFrame()
+            df_B = pd.DataFrame()
+            label_A = ""
+            label_B = ""
+
+            if type_comp == "Deux Semaines":
+                liste_semaines = sorted(df_ana["Semaine"].unique())
+                with col_a:
+                    sem_A = st.selectbox("Période A (Semaine)", liste_semaines, index=len(liste_semaines)-2 if len(liste_semaines)>1 else 0)
+                    df_A = df_ana[df_ana["Semaine"] == sem_A]
+                    label_A = f"Semaine {sem_A}"
+                with col_b:
+                    sem_B = st.selectbox("Période B (Semaine)", liste_semaines, index=len(liste_semaines)-1 if len(liste_semaines)>0 else 0)
+                    df_B = df_ana[df_ana["Semaine"] == sem_B]
+                    label_B = f"Semaine {sem_B}"
+            else:
+                liste_mois = sorted(df_ana["Mois"].unique())
+                with col_a:
+                    mois_A = st.selectbox("Période A (Mois)", liste_mois)
+                    df_A = df_ana[df_ana["Mois"] == mois_A]
+                    label_A = f"Mois {mois_A}"
+                with col_b:
+                    mois_B = st.selectbox("Période B (Mois)", liste_mois)
+                    df_B = df_ana[df_ana["Mois"] == mois_B]
+                    label_B = f"Mois {mois_B}"
+
+            st.write("---")
+            
+            # CALCUL DES METRIQUES
+            if not df_A.empty and not df_B.empty:
+                # KPI Globaaux
+                pres_A = len(df_A[df_A["Statut"]=="Présent"])
+                pres_B = len(df_B[df_B["Statut"]=="Présent"])
+                delta_pres = pres_B - pres_A
+                
+                remp_A = (pres_A / len(df_A) * 100) if len(df_A) > 0 else 0
+                remp_B = (pres_B / len(df_B) * 100) if len(df_B) > 0 else 0
+                delta_remp = remp_B - remp_A
+
+                c1, c2 = st.columns(2)
+                c1.metric(f"Présents ({label_A})", pres_A)
+                c2.metric(f"Présents ({label_B})", pres_B, delta=delta_pres)
+                
+                st.write("---")
+                st.subheader("Comparaison par Cours")
+                
+                # On prépare les données par cours pour A
+                stats_A = df_A[df_A["Statut"]=="Présent"].groupby("Cours_Complet").size().reset_index(name="Présents A")
+                # On prépare les données par cours pour B
+                stats_B = df_B[df_B["Statut"]=="Présent"].groupby("Cours_Complet").size().reset_index(name="Présents B")
+                
+                # On fusionne les deux tableaux
+                comparatif = pd.merge(stats_A, stats_B, on="Cours_Complet", how="outer").fillna(0)
+                comparatif["Ecart"] = comparatif["Présents B"] - comparatif["Présents A"]
+                
+                st.dataframe(comparatif.set_index("Cours_Complet").style.background_gradient(subset=["Ecart"], cmap="RdYlGn"), use_container_width=True)
+
+            else:
+                st.warning("Sélectionnez des périodes valides contenant des données.")
+
+
+    # --- TAB 3 : CONFIGURATION (Restaurée) ---
     with tab2:
         st.header("⚙️ Paramètres des Relances")
         col_seuils, col_msg = st.columns([1, 1])
