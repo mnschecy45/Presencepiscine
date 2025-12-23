@@ -393,186 +393,180 @@ def show_reception():
 # 4. ESPACE MANAGER (DASHBOARD ANALYTIQUE + CONFIG)
 # =======================
 def show_manager():
-    # Style CSS pour les métriques
+    # 1. CSS : ON ENLÈVE LE NOIR -> STYLE CLAIR & PROPRE
     st.markdown("""
         <style>
-        .stMetric { background-color: #0E1117; border: 1px solid #303030; padding: 15px; border-radius: 5px; }
+        .stMetric {
+            background-color: #f8f9fa; /* Gris très clair */
+            border: 1px solid #dee2e6;
+            padding: 15px;
+            border-radius: 10px;
+            color: #31333F;
+        }
+        [data-testid="stMetricLabel"] { font-weight: bold; color: #666; }
+        [data-testid="stMetricValue"] { color: #000; }
         </style>
     """, unsafe_allow_html=True)
 
-    st.title("📊 Manager - Analyse & Pilotage")
-    
-    # Sécurité
+    st.title("📊 Manager - Pilotage & Analyse")
+
+    # LOGIN
     if st.sidebar.text_input("Code Manager", type="password") != MANAGER_PASSWORD:
-        st.info("Veuillez vous identifier dans la barre latérale.")
+        st.info("Veuillez vous identifier à gauche.")
         return
 
     if df_all.empty:
-        st.warning("Aucune donnée disponible pour le moment.")
+        st.warning("Aucune donnée.")
         return
 
-    # --- PRÉPARATION DES DONNÉES POUR L'ANALYSE ---
+    # --- PRÉPARATION DONNÉES ---
     df_ana = df_all.copy()
-    
-    # Conversion dates
     if "Date_dt" not in df_ana.columns and "Date" in df_ana.columns:
          df_ana["Date_dt"] = pd.to_datetime(df_ana["Date"], errors='coerce')
+    
+    # Nettoyage
+    df_ana = df_ana.dropna(subset=["Date_dt"])
+    if "Cours" not in df_ana.columns: df_ana["Cours"] = "Inconnu"
+    if "Heure" not in df_ana.columns: df_ana["Heure"] = "?"
 
-    # Création colonne "Jour" (Lundi, Mardi...)
+    # Création colonne "Mois-Année" pour les filtres
+    df_ana["Annee"] = df_ana["Date_dt"].dt.year
+    df_ana["Mois"] = df_ana["Date_dt"].dt.month
+    df_ana["Mois_Nom"] = df_ana["Date_dt"].dt.strftime("%B") # Nom du mois
+    
+    # Mapping Jours
     jours_fr = {0: "Lundi", 1: "Mardi", 2: "Mercredi", 3: "Jeudi", 4: "Vendredi", 5: "Samedi", 6: "Dimanche"}
     df_ana["Jour_Num"] = df_ana["Date_dt"].dt.dayofweek
     df_ana["Jour"] = df_ana["Jour_Num"].map(jours_fr)
 
-    # Remplissage des vides pour Cours/Heure
-    if "Cours" not in df_ana.columns: df_ana["Cours"] = "Inconnu"
-    if "Heure" not in df_ana.columns: df_ana["Heure"] = "?"
-    df_ana["Cours"] = df_ana["Cours"].fillna("Inconnu")
-    df_ana["Heure"] = df_ana["Heure"].fillna("?")
+    # ==========================================
+    # 🕵️ FILTRES AVANCÉS (BARRE LATÉRALE)
+    # ==========================================
+    st.sidebar.header("📅 Filtres d'Analyse")
+    
+    # 1. Choix de l'Année
+    annees_dispo = sorted(df_ana["Annee"].unique(), reverse=True)
+    annee_select = st.sidebar.selectbox("Année", annees_dispo)
+    
+    # 2. Choix du Mois (ou "Tous")
+    df_annee = df_ana[df_ana["Annee"] == annee_select]
+    moisc_dispo = sorted(df_annee["Mois"].unique())
+    # Petite astuce pour afficher les mois en lettres
+    liste_mois = ["TOUS"] + [pd.to_datetime(f"2022-{m}-01").strftime("%B") for m in moisc_dispo]
+    
+    mois_select_txt = st.sidebar.selectbox("Mois", liste_mois)
 
-    # --- LES 2 ONGLETS DU MANAGER ---
-    tab_dash, tab_config = st.tabs(["📊 DASHBOARD GLOBAL", "⚙️ CONFIGURATION"])
+    # 3. APPLICATION DU FILTRE
+    if mois_select_txt == "TOUS":
+        df_filtered = df_annee
+        titre_periode = f"Année {annee_select}"
+    else:
+        # On retrouve le numéro du mois
+        mois_index = liste_mois.index(mois_select_txt) # L'index dans la liste correspond
+        mois_num = moisc_dispo[mois_index - 1]
+        df_filtered = df_annee[df_annee["Mois"] == mois_num]
+        titre_periode = f"{mois_select_txt} {annee_select}"
 
-    # ========================================================
-    # ONGLET 1 : LE DASHBOARD (Stats, Graphiques, Tops)
-    # ========================================================
-    with tab_dash:
-        st.subheader("Vue d'ensemble")
+    st.subheader(f"Analyse : {titre_periode}")
+
+    # ==========================================
+    # DASHBOARD
+    # ==========================================
+    
+    # 1. CHIFFRES CLÉS (KPIs)
+    nb_inscrits = len(df_filtered) # Total théorique
+    nb_presents = len(df_filtered[df_filtered["Statut"] == "Présent"]) # Réel
+    nb_absents = len(df_filtered[df_filtered["Statut"] == "Absent"])
+    
+    taux_remplissage = (nb_presents / nb_inscrits * 100) if nb_inscrits > 0 else 0
+    
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Inscrits (Théorique)", nb_inscrits)
+    c2.metric("Présents (Réel)", nb_presents, delta=f"{taux_remplissage:.1f}%", delta_color="normal")
+    c3.metric("Absents", nb_absents, delta_color="inverse")
+    c4.metric("Chiffre d'Affaires (Est.)", f"{nb_presents * 15} €") # Exemple si séance = 15€
+
+    st.write("---")
+
+    # 2. LE TABLEAU ULTIME : PAR CRÉNEAU PRÉCIS
+    st.subheader("Details par Créneau (Jour & Heure)")
+    st.info("Ce tableau distingue bien le cours du Lundi de celui du Jeudi.")
+    
+    if not df_filtered.empty:
+        # On groupe par JOUR + HEURE + COURS
+        # On compte les Inscrits (Toutes lignes) et les Présents (Statut == Présent)
+        synthese = df_filtered.groupby(["Jour_Num", "Jour", "Heure", "Cours"]).agg(
+            Inscrits=('Nom', 'count'),
+            Presents=('Statut', lambda x: (x == 'Présent').sum())
+        ).reset_index()
         
-        # 1. KPIs (Indicateurs Clés)
-        nb_total_lignes = len(df_ana)
-        nb_abs = len(df_ana[df_ana["Statut"] == "Absent"])
-        nb_pres = len(df_ana[df_ana["Statut"] == "Présent"])
-        taux_pres = (nb_pres / nb_total_lignes * 100) if nb_total_lignes > 0 else 0
-        nb_clients_uniques = df_ana["Nom"].nunique()
-
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Total Séances", nb_total_lignes)
-        c2.metric("Clients Actifs", nb_clients_uniques)
-        c3.metric("Total Absences", nb_abs, delta_color="inverse")
-        c4.metric("Taux de Présence", f"{taux_pres:.1f}%")
-
-        st.write("---")
-
-        # 2. GRAPHIQUE D'ÉVOLUTION
-        st.subheader("📈 Évolution de la fréquentation")
-        # On groupe par date et statut
-        chart_data = df_ana.groupby(["Date_dt", "Statut"]).size().unstack().fillna(0)
-        st.bar_chart(chart_data, height=300)
-
-        st.write("---")
-
-        # 3. STATS PAR COURS & CRÉNEAUX
-        col_g, col_d = st.columns(2)
+        # Calcul du Taux et des Absents
+        synthese["Absents"] = synthese["Inscrits"] - synthese["Presents"]
+        synthese["Taux %"] = (synthese["Presents"] / synthese["Inscrits"] * 100).round(1)
         
-        with col_g:
-            st.subheader("🏊 Par Cours")
-            # Compte le nombre total de séances par type de cours
-            stats_cours = df_ana["Cours"].value_counts().reset_index()
-            stats_cours.columns = ["Cours", "Nb Inscrits"]
-            st.dataframe(stats_cours, use_container_width=True, hide_index=True)
-            
-        with col_d:
-            st.subheader("⏰ Par Créneau Horaire")
-            stats_heure = df_ana["Heure"].value_counts().reset_index()
-            stats_heure.columns = ["Heure", "Nb Inscrits"]
-            st.dataframe(stats_heure, use_container_width=True, hide_index=True)
+        # Tri chronologique (Lundi -> Dimanche)
+        synthese = synthese.sort_values(by=["Jour_Num", "Heure"])
+        
+        # Affichage propre (On cache la colonne Jour_Num qui sert juste au tri)
+        st.dataframe(
+            synthese[["Jour", "Heure", "Cours", "Inscrits", "Presents", "Absents", "Taux %"]],
+            use_container_width=True,
+            column_config={
+                "Taux %": st.column_config.ProgressColumn(
+                    "Taux Présence",
+                    format="%.1f%%",
+                    min_value=0,
+                    max_value=100,
+                )
+            }
+        )
+    else:
+        st.info("Aucune donnée pour cette période.")
 
-        st.write("---")
+    st.write("---")
+    
+    # 3. GRAPHIQUE COMPARAISON VISUELLE
+    c_g1, c_g2 = st.columns(2)
+    
+    with c_g1:
+        st.subheader("Inscrits vs Présents (Par Cours)")
+        # On regroupe par cours pour voir lequel est le plus "rentable"
+        bar_data = df_filtered.groupby("Cours")[["Statut"]].apply(lambda x: pd.Series({
+            "Théorique": len(x),
+            "Réel": len(x[x["Statut"] == "Présent"])
+        })).unstack()
+        st.bar_chart(bar_data)
+        
+    with c_g2:
+        st.subheader("Affluence par Jour")
+        # Juste les présents
+        jour_data = df_filtered[df_filtered["Statut"] == "Présent"].groupby("Jour").size()
+        # On trie pour avoir Lundi Mardi...
+        ordre_jours = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
+        jour_data = jour_data.reindex(ordre_jours, fill_value=0)
+        st.bar_chart(jour_data, color="#76b900") # Vert piscine
 
-        # 4. STATS PAR JOURS DE LA SEMAINE
-        st.subheader("📅 Affluence par Jour")
-        # On trie par ordre de la semaine (0=Lundi)
-        stats_jour = df_ana.groupby(["Jour_Num", "Jour"]).size().reset_index(name="Total")
-        stats_jour = stats_jour.sort_values("Jour_Num").set_index("Jour")["Total"]
-        st.bar_chart(stats_jour)
-
-        st.write("---")
-
-        # 5. LES TOP 10 (Absents & Présents)
-        c_top1, c_top2 = st.columns(2)
-
-        with c_top1:
-            st.subheader("🚨 TOP 10 - Les + Absents")
-            df_abs_only = df_ana[df_ana["Statut"] == "Absent"]
-            if not df_abs_only.empty:
-                top_abs = df_abs_only["Nom"].value_counts().head(10).reset_index()
-                top_abs.columns = ["Nom", "Nb Absences"]
-                st.dataframe(top_abs, use_container_width=True, hide_index=True)
-            else:
-                st.success("Aucun absent ! Bravo.")
-
-        with c_top2:
-            st.subheader("🏆 TOP 10 - Les + Assidus")
-            df_pres_only = df_ana[df_ana["Statut"] == "Présent"]
-            if not df_pres_only.empty:
-                top_pres = df_pres_only["Nom"].value_counts().head(10).reset_index()
-                top_pres.columns = ["Nom", "Nb Présences"]
-                st.dataframe(top_pres, use_container_width=True, hide_index=True)
-            else:
-                st.info("Pas encore de données de présence.")
-
-    # ========================================================
-    # ONGLET 2 : CONFIGURATION (Seuils & Messages)
-    # ========================================================
-    with tab_config:
-        st.header("⚙️ Configuration des Relances")
-        st.info("C'est ici que vous définissez les règles pour l'équipe Réception.")
-
+    # ==========================================
+    # ONGLET CONFIG (Caché en bas pour pas gêner)
+    # ==========================================
+    with st.expander("⚙️ CONFIGURATION DES RELANCES (Paliers & Messages)"):
+        # On remet ici votre config P1/P2/P3
         c_seuils, c_msg = st.columns([1, 1])
-        
         with c_seuils:
-            st.subheader("Paliers d'absences")
-            
             st.markdown("**Niveau 1 (Mail)**")
-            c1a, c1b = st.columns([1, 2])
             st.number_input("Seuil P1", key="p1_val", value=1)
-            st.text_input("Label P1", key="p1_label", value="Mail Rappel")
+            st.text_input("Label P1", key="p1_label", value="Mail")
             
-            st.markdown("**Niveau 2 (Téléphone)**")
-            c2a, c2b = st.columns([1, 2])
+            st.markdown("**Niveau 2 (Tel)**")
             st.number_input("Seuil P2", key="p2_val", value=3)
-            st.text_input("Label P2", key="p2_label", value="Appel Tel.")
+            st.text_input("Label P2", key="p2_label", value="Appel")
             
-            st.markdown("**Niveau 3 (Convocation)**")
-            c3a, c3b = st.columns([1, 2])
+            st.markdown("**Niveau 3 (RDV)**")
             st.number_input("Seuil P3", key="p3_val", value=5)
             st.text_input("Label P3", key="p3_label", value="Convocation")
-            
+
         with c_msg:
-            st.subheader("Messages Types")
-            
-            st.markdown("**Message P1 (Mail)**")
-            default_p1 = "Bonjour {prenom},\n\nSauf erreur, vous avez manqué ces séances :\n{details}\n\nMerci de confirmer votre présence."
-            st.text_area("Template", key="msg_tpl", value=default_p1, height=150)
-
-            st.markdown("**Message P3 (Convocation)**")
-            default_p3 = "Bonjour {prenom},\n\nCompte tenu de vos absences ({details}), merci de passer à l'accueil pour un point."
-            st.text_area("Template P3", key="msg_p3_tpl", value=default_p3, height=150)
-
-        if st.button("💾 Enregistrer la configuration"):
-            # Note: Streamlit enregistre automatiquement dans session_state les clés key="..."
-            st.success("Configuration sauvegardée pour la session !")
-
-# =======================
-# 5. HUB D'ACCUEIL
-# =======================
-def show_main_hub():
-    st.markdown("<h1 style='text-align: center;'>🏊‍♂️ Piscine Pro</h1>", unsafe_allow_html=True)
-    st.write("---")
-    c1, c2, c3 = st.columns(3)
-    if c1.button("👨‍🏫 MAÎTRE-NAGEUR", use_container_width=True):
-        st.session_state.current_page = "MN"; st.rerun()
-    if c2.button("💁 RÉCEPTION", use_container_width=True):
-        st.session_state.current_page = "REC"; st.rerun()
-    if c3.button("📊 MANAGER", use_container_width=True):
-        st.session_state.current_page = "MGR"; st.rerun()
-
-if 'current_page' not in st.session_state: st.session_state.current_page = "HUB"
-if st.session_state.current_page != "HUB":
-    if st.sidebar.button("🏠 Accueil"):
-        st.session_state.current_page = "HUB"; st.rerun()
-
-if st.session_state.current_page == "HUB": show_main_hub()
-elif st.session_state.current_page == "MN": show_maitre_nageur()
-elif st.session_state.current_page == "REC": show_reception()
-elif st.session_state.current_page == "MGR": show_manager()
+            st.text_area("Template P1", key="msg_tpl", value="Bonjour...", height=100)
+            st.text_area("Template P3", key="msg_p3_tpl", value="Convocation...", height=100)
+            if st.button("Sauvegarder Config"):
+                st.success("Config OK")
