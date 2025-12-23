@@ -154,6 +154,24 @@ def show_maitre_nageur():
                         nr["Nom"] = nm; nr["Prenom"] = "(Manuel)"; nr["Manuel"] = True; nr["Absent"] = False
                         st.session_state.df_appel = pd.concat([df, pd.DataFrame([nr])], ignore_index=True)
                         st.rerun()
+                        # --- AJOUT DU RÉCAPITULATIF (A INSÉRER ICI) ---
+            st.divider()
+            st.markdown("### 📝 Récapitulatif de la séance")
+            
+            # Calculs des totaux en temps réel
+            nb_total = len(df)
+            nb_present = len(df[df["Absent"] == False])
+            nb_absent = len(df[df["Absent"] == True])
+            # On compte les manuels (s'ils existent dans le dataframe)
+            nb_manuels = len(df[df["Manuel"] == True]) if "Manuel" in df.columns else 0
+
+            # Affichage en colonnes
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("Total Inscrits", nb_total)
+            k2.metric("✅ Présents", nb_present, delta_color="normal")
+            k3.metric("❌ Absents", nb_absent, delta_color="inverse")
+            k4.metric("➕ Ajouts Manuels", nb_manuels)
+            # -----------------------------------------------
 
             if st.button("💾 SAUVEGARDER", type="primary"):
                 save_data_to_cloud(df)
