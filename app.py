@@ -179,7 +179,7 @@ def show_maitre_nageur():
                 st.rerun()
 
 # =======================
-# 4. RÉCEPTION
+# 4. RÉCEPTION (CORRIGÉ)
 # =======================
 def show_reception():
     st.title("💁 Réception")
@@ -254,12 +254,18 @@ def show_reception():
         if not done.empty:
             cols = ["Nom", "Date", "Cours"]
             if "Date_Traitement" in done.columns:
-                cols.append("Date_Traitement")
+                # --- CORRECTION ICI ---
+                # On convertit la colonne en format date python
+                done["Date_Traitement"] = pd.to_datetime(done["Date_Traitement"])
+                # On trie
                 done = done.sort_values("Date_Traitement", ascending=False)
+                # On formate en texte propre "23/12/2025 10:03"
+                done["Date_Traitement"] = done["Date_Traitement"].dt.strftime("%d/%m/%Y %H:%M")
+                
+                cols.append("Date_Traitement")
             st.dataframe(done[cols], use_container_width=True)
         else:
             st.info("Vide")
-
 # =======================
 # 5. MANAGER
 # =======================
