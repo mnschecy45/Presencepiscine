@@ -8,16 +8,74 @@ from datetime import datetime, date
 from pyairtable import Api
 
 # =======================
-# 0. VOS CLES AIRTABLE (A REMPLIR)
+# 0. VOS CLES AIRTABLE
 # =======================
-API_TOKEN = "pat85co2rWjG48EDz.e6e628e1b5da543271388625e0006a0186a2e424ff7a3ae6e146508794f8edbd" # Ton token
-BASE_ID = "app390ytx6oa2rbge"    # Ton ID de base
-TABLE_NAME = "Presences"             # Nom de l'onglet
+API_TOKEN = "pat85co2rWjG48EDz.e6e628e1b5da543271388625e0006a0186a2e424ff7a3ae6e146508794f8edbd"
+BASE_ID = "app390ytx6oa2rbge"
+TABLE_NAME = "Presences"
 
 # =======================
-# 1. CONFIGURATION & CHARGEMENT
+# 1. CONFIGURATION & STYLE
 # =======================
 st.set_page_config(page_title="Piscine Pro", layout="wide", page_icon="🏊‍♂️")
+
+# --- CSS PERSONNALISÉ (COULEURS + FOOTER) ---
+st.markdown("""
+    <style>
+    /* Style pour PRÉSENT (Vert foncé) */
+    .student-box-present {
+        background-color: #1b5e20;
+        color: white;
+        padding: 15px;
+        border-radius: 8px;
+        font-weight: bold;
+        font-size: 16px;
+        margin-bottom: 5px;
+        text-align: center;
+        border: 1px solid #144a17;
+    }
+    
+    /* Style pour ABSENT (Rouge vif) */
+    .student-box-absent {
+        background-color: #b71c1c; 
+        color: white;
+        padding: 15px;
+        border-radius: 8px;
+        font-weight: bold;
+        font-size: 16px;
+        margin-bottom: 5px;
+        text-align: center;
+        border: 1px solid #7f0000;
+    }
+
+    /* Checkbox centré verticalement */
+    .stCheckbox {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100%;
+        padding-top: 10px;
+    }
+
+    /* Footer Fixe en bas de page */
+    .fixed-footer {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        width: 100%;
+        background-color: #1e1e1e;
+        padding: 15px 10px;
+        border-top: 3px solid #4CAF50;
+        z-index: 9999;
+        box-shadow: 0px -2px 10px rgba(0,0,0,0.5);
+    }
+    
+    /* Marge en bas pour ne pas cacher le dernier élève derrière le footer */
+    .block-container {
+        padding-bottom: 120px;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
 MANAGER_PASSWORD = st.secrets.get("MANAGER_PASSWORD", "manager")
 
@@ -103,20 +161,23 @@ def parse_pdf_complete(file_bytes):
     return pd.DataFrame(rows)
 
 # =======================
-# 3. MAÎTRE-NAGEUR
+# 3. MAÎTRE-NAGEUR (REFONDU)
 # =======================
 def show_maitre_nageur():
     st.title("👨‍🏫 Appel Bassin")
+    
+    # Écran de succès après validation
     if st.session_state.get("appel_termine", False):
-        st.success("✅ Enregistré !")
-        if st.button("Nouveau"):
+        st.success("✅ Enregistré avec succès !")
+        if st.button("Nouveau Scan"):
             st.session_state.appel_termine = False
             for k in list(st.session_state.keys()):
                 if k.startswith("cb_"): del st.session_state[k]
             st.rerun()
         return
 
-    up = st.file_uploader("PDF", type=["pdf"])
+    # Upload PDF
+    up = st.file_uploader("Charger le PDF", type=["pdf"])
     if up:
         if 'current_file' not in st.session_state or st.session_state.current_file != up.name:
             st.session_state.current_file = up.name
@@ -127,112 +188,123 @@ def show_maitre_nageur():
             d_aff = df['Date'].iloc[0].strftime('%d/%m/%Y') if isinstance(df['Date'].iloc[0], (date, datetime)) else str(df['Date'].iloc[0])
             st.info(f"📅 {d_aff} | {df['Cours'].iloc[0]} ({df['Heure'].iloc[0]})")
             
+            # --- BOUTONS GLOBAUX ---
             c1, c2 = st.columns(2)
-            if c1.button("✅ TOUT PRÉSENT"):
+            if c1.button("✅ TOUT PRÉSENT", use_container_width=True):
                 for i in range(len(df)): st.session_state[f"cb_{i}"] = True
                 st.rerun()
-            if c2.button("❌ TOUT ABSENT"):
+            if c2.button("❌ TOUT ABSENT", use_container_width=True):
                 for i in range(len(df)): st.session_state[f"cb_{i}"] = False
                 st.rerun()
 
+            # --- OPTION RETARDATAIRES ---
             st.write("---")
+            mode_retard = st.toggle("🕒 Mode Retardataires (Masquer les présents)")
+            
+            # --- LISTE DES ÉLÈVES ---
+            st.write("### Liste des élèves")
+            
             for idx, row in df.iterrows():
                 k = f"cb_{idx}"
+                # Initialisation de la checkbox si inexistante
                 if k not in st.session_state: st.session_state[k] = False
-                bg = "#dcfce7" if st.session_state[k] else "#fee2e2"
-                c_n, c_c = st.columns([4, 1])
-                c_n.markdown(f"<div style='padding:8px; background:{bg}; border-radius:5px;'><b>{row['Nom']} {row['Prenom']}</b></div>", unsafe_allow_html=True)
-                st.checkbox("P", key=k, label_visibility="collapsed")
+                
+                # Si mode retardataire activé ET que l'élève est présent, on saute l'affichage
+                if mode_retard and st.session_state[k]:
+                    continue
+                
+                # Layout Mobile : Checkbox à gauche (petite), Nom coloré à droite (grand)
+                col_check, col_name = st.columns([1, 4])
+                
+                with col_check:
+                    # Checkbox qui contrôle l'état
+                    st.checkbox("P", key=k, label_visibility="collapsed")
+                
+                with col_name:
+                    nom_complet = f"{row['Nom']} {row['Prenom']}"
+                    # Affichage conditionnel Rouge/Vert selon la checkbox
+                    if st.session_state[k]:
+                        st.markdown(f'<div class="student-box-present">{nom_complet}</div>', unsafe_allow_html=True)
+                    else:
+                        st.markdown(f'<div class="student-box-absent">{nom_complet}</div>', unsafe_allow_html=True)
+                
+                # Mise à jour du DataFrame en temps réel
                 df.at[idx, "Absent"] = not st.session_state[k]
 
+            # --- AJOUT MANUEL ---
             st.write("---")
-            with st.expander("➕ Ajout Manuel"):
+            with st.expander("➕ Ajouter un élève manuellement"):
                 with st.form("add"):
-                    nm = st.text_input("Nom").upper()
+                    nm = st.text_input("Nom de famille").upper()
+                    pr = st.text_input("Prénom")
                     if st.form_submit_button("Ajouter"):
                         nr = df.iloc[0].copy()
-                        nr["Nom"] = nm; nr["Prenom"] = "(Manuel)"; nr["Manuel"] = True; nr["Absent"] = False
+                        nr["Nom"] = nm; nr["Prenom"] = pr if pr else "(Manuel)"; 
+                        nr["Manuel"] = True; nr["Absent"] = False
+                        # On ajoute au DF et on coche la case par défaut
                         st.session_state.df_appel = pd.concat([df, pd.DataFrame([nr])], ignore_index=True)
+                        new_idx = len(st.session_state.df_appel) - 1
+                        st.session_state[f"cb_{new_idx}"] = True
                         st.rerun()
-                        # --- AJOUT DU RÉCAPITULATIF (A INSÉRER ICI) ---
-            st.divider()
-            st.markdown("### 📝 Récapitulatif de la séance")
-            
-            # Calculs des totaux en temps réel
-            nb_total = len(df)
+
+            # --- FOOTER FIXE (RÉCAP + VALIDATION) ---
             nb_present = len(df[df["Absent"] == False])
-            nb_absent = len(df[df["Absent"] == True])
-            # On compte les manuels (s'ils existent dans le dataframe)
-            nb_manuels = len(df[df["Manuel"] == True]) if "Manuel" in df.columns else 0
+            nb_total = len(df)
+            
+            # Injection HTML pour le footer fixe
+            st.markdown(f"""
+            <div class="fixed-footer">
+                <div style="display: flex; justify-content: space-between; align-items: center; max-width: 800px; margin: 0 auto; color: white;">
+                    <div style="font-size: 1.2rem; font-weight: bold;">
+                        Présents : {nb_present} / {nb_total}
+                    </div>
+                    </div>
+            </div>
+            """, unsafe_allow_html=True)
 
-            # Affichage en colonnes
-            k1, k2, k3, k4 = st.columns(4)
-            k1.metric("Total Inscrits", nb_total)
-            k2.metric("✅ Présents", nb_present, delta_color="normal")
-            k3.metric("❌ Absents", nb_absent, delta_color="inverse")
-            k4.metric("➕ Ajouts Manuels", nb_manuels)
-            # -----------------------------------------------
-
-            if st.button("💾 SAUVEGARDER", type="primary"):
+            # Bouton Valider Streamlit standard (il sera juste au dessus du footer visuel ou dedans si CSS ajusté, 
+            # ici on le garde en bas de flux normal mais visible grâce au padding-bottom)
+            if st.button(f"💾 SAUVEGARDER L'APPEL ({nb_present}/{nb_total})", type="primary", use_container_width=True):
                 save_data_to_cloud(df)
                 st.session_state.appel_termine = True
                 st.rerun()
 
 # =======================
-# 4. RÉCEPTION (CORRIGÉ - BUG FIX PRENOM)
+# 4. RÉCEPTION (AVEC FIX)
 # =======================
 def show_reception():
     st.title("💁 Réception")
     if df_all.empty: return
 
     df_w = df_all.copy()
-    
-    # --- CORRECTION DU BUG ICI ---
-    # On s'assure que les colonnes existent même si Airtable ne les renvoie pas
     if "Date_dt" not in df_w.columns and "Date" in df_w.columns:
          df_w["Date_dt"] = pd.to_datetime(df_w["Date"], errors='coerce')
     if "Traite" not in df_w.columns: df_w["Traite"] = False
-    if "Prenom" not in df_w.columns: df_w["Prenom"] = "" # <--- C'est cette ligne qui manquait !
-    # -----------------------------
+    if "Prenom" not in df_w.columns: df_w["Prenom"] = ""
 
     t1, t2, t3 = st.tabs(["⚡ ABSENCES", "⚠️ NON INSCRITS", "✅ HISTORIQUE"])
 
-    # --- ONGLET 1 : ABSENCES ---
     with t1:
-        # On ne prend que les Absents qui ne sont PAS des ajouts manuels
-        # Maintenant que la colonne Prenom est forcée, ça ne plantera plus
         todo = df_w[(df_w["Statut"] == "Absent") & (df_w["Traite"] != True) & (df_w["Prenom"] != "(Manuel)")]
-        
-        if todo.empty:
-            st.success("Aucune absence à traiter.")
+        if todo.empty: st.success("Aucune absence à traiter.")
         else:
             st.write(f"**{len(todo)} absences en attente**")
-            cli = st.selectbox("Client (Absent)", todo["Nom"].unique())
+            cli = st.selectbox("Client", todo["Nom"].unique())
             if cli:
                 tot_abs = len(df_w[(df_w["Nom"] == cli) & (df_w["Statut"] == "Absent")])
-                s1 = st.session_state.get("p1_val", 1); s2 = st.session_state.get("p2_val", 3); s3 = st.session_state.get("p3_val", 5)
-                l1 = st.session_state.get("p1_label", "Mail"); l2 = st.session_state.get("p2_label", "Tel"); l3 = st.session_state.get("p3_label", "RDV")
+                s1, s2, s3 = 1, 3, 5
                 
-                niv = 1; lbl = l1
-                if tot_abs >= s3: niv=3; lbl=l3
-                elif tot_abs >= s2: niv=2; lbl=l2
+                niv = 1
+                if tot_abs >= s3: niv=3
+                elif tot_abs >= s2: niv=2
                 
                 color = "🔴" if niv==3 else "🟠" if niv==2 else "🟡"
-                st.markdown(f"### {color} NIVEAU {niv} - {lbl} ({tot_abs} abs)")
+                st.markdown(f"### {color} NIVEAU {niv} ({tot_abs} abs)")
 
-                sub = todo[todo["Nom"] == cli].sort_values("Date_dt", ascending=False)
+                sub = todo[todo["Nom"] == cli]
                 ids = sub['id'].tolist()
                 
-                txts = [f"- {r.get('Cours','?')} le {r['Date_dt'].strftime('%d/%m')}" for _, r in sub.iterrows()]
-                det = "\n".join(txts)
-                
-                tpl_def_p1 = "Bonjour {prenom},\n\nSauf erreur de notre part, nous avons relevé les absences suivantes :\n{details}\n\nMerci de confirmer votre présence."
-                tpl_p1 = st.session_state.get("msg_tpl", tpl_def_p1)
-                
-                msg_val = tpl_p1.replace("{prenom}", cli).replace("{details}", det)
-                st.text_area("Message à envoyer :", msg_val, height=150)
-
-                if st.button(f"✅ Traiter {lbl}", type="primary", key="btn_abs"):
+                if st.button("✅ Marquer comme traité", type="primary"):
                     now = datetime.now().strftime("%Y-%m-%d %H:%M")
                     for pid in ids:
                         try: table.update(pid, {"Traite": True, "Date_Traitement": now})
@@ -240,348 +312,50 @@ def show_reception():
                     st.success("Traité !")
                     st.rerun()
 
-    # --- ONGLET 2 : NON INSCRITS ---
     with t2:
         manuels = df_w[(df_w["Prenom"] == "(Manuel)") & (df_w["Traite"] != True)]
-        
-        if manuels.empty:
-            st.success("Aucun dossier non-inscrit.")
+        if manuels.empty: st.success("R.A.S")
         else:
-            st.warning(f"**{len(manuels)} personnes venues sans inscription**")
-            cli_man = st.selectbox("Client (Non Inscrit)", manuels["Nom"].unique())
-            
+            st.warning(f"{len(manuels)} non-inscrits")
+            cli_man = st.selectbox("Client", manuels["Nom"].unique())
             if cli_man:
                 sub_m = manuels[manuels["Nom"] == cli_man]
                 ids_m = sub_m['id'].tolist()
-                
-                last_cours = sub_m.iloc[0]["Cours"]
-                last_date = sub_m.iloc[0]["Date_dt"].strftime("%d/%m") if pd.notnull(sub_m.iloc[0]["Date_dt"]) else "?"
-                
-                st.info(f"Dernier passage : {last_cours} le {last_date}")
-
-                tpl_def_man = "Bonjour {nom},\n\nVous avez participé au cours de {cours} le {date} sans inscription.\nMerci de passer à l'accueil."
-                tpl_man = st.session_state.get("msg_manual_tpl", tpl_def_man)
-                
-                msg_fin = tpl_man.replace("{nom}", cli_man).replace("{cours}", str(last_cours)).replace("{date}", last_date)
-                
-                st.markdown("#### 📧 Message de régularisation")
-                st.text_area("A copier :", msg_fin, height=150, key="txt_man")
-                
-                if st.button("✅ Notifié & Traité", type="primary", key="btn_man"):
+                if st.button("✅ Régularisé"):
                     now = datetime.now().strftime("%Y-%m-%d %H:%M")
                     for pid in ids_m:
                         try: table.update(pid, {"Traite": True, "Date_Traitement": now})
                         except: pass
-                    st.success("Dossier régularisé !")
                     st.rerun()
 
-    # --- ONGLET 3 : HISTORIQUE ---
     with t3:
-        done = df_w[((df_w["Statut"] == "Absent") | (df_w["Prenom"] == "(Manuel)")) & (df_w["Traite"] == True)]
-        
-        if not done.empty:
-            cols = ["Nom", "Date", "Cours", "Statut"]
-            if "Date_Traitement" in done.columns:
-                done["Date_Traitement"] = pd.to_datetime(done["Date_Traitement"])
-                done = done.sort_values("Date_Traitement", ascending=False)
-                done["Date_Traitement"] = done["Date_Traitement"].dt.strftime("%d/%m/%Y %H:%M")
-                cols.append("Date_Traitement")
-            
-            st.dataframe(done[cols], use_container_width=True)
-        else:
-            st.info("Historique vide")
+        done = df_w[df_w["Traite"] == True]
+        st.dataframe(done, use_container_width=True)
+
 # =======================
-# 5. MANAGER (COMPLET AVEC NOUVELLE CONFIG)
+# 5. MANAGER
 # =======================
 def show_manager():
-    st.markdown("""
-        <style>
-        [data-testid="stMetric"] {
-            background-color: #f8f9fa !important;
-            border: 1px solid #dee2e6 !important;
-            padding: 15px !important;
-            border-radius: 10px !important;
-            color: black !important;
-        }
-        [data-testid="stMetric"] label { color: #333 !important; }
-        [data-testid="stMetric"] div[data-testid="stMetricValue"] { color: #000 !important; }
-        [data-testid="stMetric"] p { color: #000 !important; }
-        </style>
-    """, unsafe_allow_html=True)
     st.title("📊 Manager")
-
     if st.sidebar.text_input("Mdp", type="password") != MANAGER_PASSWORD:
         st.warning("Accès refusé"); return
     
-    # --- NETTOYAGE ---
-    df_ana = df_all.copy()
-    if not df_ana.empty:
-        if "Date_dt" not in df_ana.columns and "Date" in df_ana.columns:
-             df_ana["Date_dt"] = pd.to_datetime(df_ana["Date"], errors='coerce')
-        df_ana = df_ana.dropna(subset=["Date_dt"])
+    # Simple vue des stats
+    if not df_all.empty:
+        tot = len(df_all)
+        pres = len(df_all[df_all["Statut"]=="Présent"])
+        st.metric("Taux de présence global", f"{pres/tot*100:.1f}%")
+        st.dataframe(df_all)
+    
+    # Bouton Reset
+    if st.checkbox("Activer suppression"):
+        if st.button("🔥 VIDER LA BASE", type="primary"):
+            ids = [r['id'] for r in table.all()]
+            for i in range(0, len(ids), 10):
+                table.batch_delete(ids[i:i+10])
+            st.success("Base vidée.")
+            st.rerun()
 
-        def clean_h(v):
-            if pd.isna(v): return "?"
-            s = str(v)
-            if len(s) > 8 and (" " in s or "T" in s):
-                try: return s.replace("T", " ").split(" ")[-1][:5]
-                except: return s
-            return s
-
-        if "Heure" in df_ana.columns: df_ana["Heure"] = df_ana["Heure"].apply(clean_h).astype(str)
-        else: df_ana["Heure"] = "?"
-
-        if "Cours" not in df_ana.columns: df_ana["Cours"] = "Inconnu"
-        df_ana["Cours"] = df_ana["Cours"].fillna("Inconnu").astype(str)
-
-        jours = {0:"Lundi", 1:"Mardi", 2:"Mercredi", 3:"Jeudi", 4:"Vendredi", 5:"Samedi", 6:"Dimanche"}
-        df_ana["Jour_Num"] = df_ana["Date_dt"].dt.dayofweek
-        df_ana["Jour"] = df_ana["Jour_Num"].map(jours).fillna("?").astype(str)
-        
-        df_ana["Annee"] = df_ana["Date_dt"].dt.year
-        df_ana["Mois"] = df_ana["Date_dt"].dt.month
-        df_ana["Semaine"] = df_ana["Date_dt"].dt.isocalendar().week
-        df_ana["Cours_Complet"] = df_ana["Cours"] + " (" + df_ana["Jour"] + " " + df_ana["Heure"] + ")"
-
-    mois_map = {1: "Janvier", 2: "Février", 3: "Mars", 4: "Avril", 5: "Mai", 6: "Juin",
-        7: "Juillet", 8: "Août", 9: "Septembre", 10: "Octobre", 11: "Novembre", 12: "Décembre"}
-
-    t_dash, t_comp, t_conf, t_maint = st.tabs(["📊 DASHBOARD", "🚀 ANALYSE", "⚙️ CONFIG", "🛠️ MAINTENANCE"])
-
-    # ----------------------------------------------------
-    # TAB 1 : DASHBOARD
-    # ----------------------------------------------------
-    with t_dash:
-        if df_ana.empty: st.info("Base vide. Allez dans Maintenance."); 
-        else:
-            st.sidebar.header("📅 Filtres")
-            yrs = sorted(df_ana["Annee"].unique(), reverse=True)
-            yr = st.sidebar.selectbox("Année", yrs)
-            df_yr = df_ana[df_ana["Annee"] == yr]
-
-            vue = st.sidebar.radio("Vue", ["Mois", "Semaine"])
-            if vue == "Mois":
-                mths_nums = sorted(df_yr["Mois"].unique())
-                mths_names = ["TOUS"] + [mois_map.get(m, str(m)) for m in mths_nums]
-                ms = st.sidebar.selectbox("Mois", mths_names)
-                if ms == "TOUS": df_filt = df_yr.copy()
-                else:
-                    choix_num = [k for k, v in mois_map.items() if v == ms][0]
-                    df_filt = df_yr[df_yr["Mois"] == choix_num].copy()
-            else:
-                sems = sorted(df_yr["Semaine"].unique())
-                sl = [f"Semaine {s}" for s in sems]
-                ss = st.sidebar.selectbox("Semaine", sl)
-                df_filt = df_yr[df_yr["Semaine"] == int(ss.split()[1])].copy()
-
-            tot = len(df_filt)
-            pres = len(df_filt[df_filt["Statut"]=="Présent"])
-            absent = len(df_filt[df_filt["Statut"]=="Absent"])
-            taux = (pres/tot*100) if tot>0 else 0
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Inscrits", tot)
-            c2.metric("Présents", pres, f"{taux:.1f}%")
-            c3.metric("Absents", absent, delta_color="inverse")
-            
-            st.divider()
-            st.subheader("📈 Fréquentation")
-            if not df_filt.empty:
-                da = df_filt[df_filt["Statut"]=="Présent"].groupby("Date_dt").size()
-                da.index = da.index.strftime("%d/%m")
-                st.area_chart(da, color="#3b82f6")
-            
-            st.divider()
-            g1, g2 = st.columns(2)
-            with g1:
-                st.subheader("🔥 Top Cours (Présence)")
-                if not df_filt.empty:
-                    tc = df_filt[df_filt["Statut"]=="Présent"]["Cours_Complet"].value_counts().head(10)
-                    st.bar_chart(tc)
-            with g2:
-                st.subheader("📉 Top Cours (Absences)")
-                if not df_filt.empty:
-                    df_abs = df_filt[df_filt["Statut"]=="Absent"]
-                    if not df_abs.empty:
-                        tc_abs = df_abs["Cours_Complet"].value_counts().head(10)
-                        st.bar_chart(tc_abs, color="#ff4b4b")
-                    else:
-                        st.success("Aucune absence sur cette période.")
-
-            st.write("---")
-            st.subheader("📅 Par Jour")
-            if not df_filt.empty:
-                sem_counts = df_filt[df_filt["Statut"]=="Présent"].groupby("Jour").size()
-                ordre_jours = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
-                sem_df = pd.DataFrame(sem_counts).reindex(ordre_jours, fill_value=0).reset_index()
-                sem_df.columns = ["Jour", "Nombre"]
-                chart_j = alt.Chart(sem_df).mark_bar(color="#76b900").encode(
-                    x=alt.X('Jour', sort=ordre_jours, title=None),
-                    y=alt.Y('Nombre', title=None)
-                )
-                st.altair_chart(chart_j, use_container_width=True)
-
-            st.divider()
-            st.subheader("📋 Détails Créneaux")
-            if not df_filt.empty:
-                synt = df_filt.groupby(["Jour_Num", "Jour", "Heure", "Cours"]).agg(
-                    Inscrits=('Nom', 'count'),
-                    Presents=('Statut', lambda x: (x=='Présent').sum())
-                ).reset_index()
-                synt["Taux %"] = (synt["Presents"]/synt["Inscrits"]*100).round(1)
-                synt.sort_values(["Jour_Num", "Heure"], inplace=True)
-                st.dataframe(synt[["Jour", "Heure", "Cours", "Inscrits", "Presents", "Taux %"]], use_container_width=True, hide_index=True)
-                
-            st.divider()
-            k1, k2 = st.columns(2)
-            with k1:
-                st.subheader("🚨 Top Absents")
-                if not df_filt.empty:
-                    ta = df_filt[df_filt["Statut"]=="Absent"]["Nom"].value_counts().head(10).reset_index(name="Abs")
-                    st.dataframe(ta, use_container_width=True, hide_index=True)
-            with k2:
-                st.subheader("🏆 Top Assidus")
-                if not df_filt.empty:
-                    tp = df_filt[df_filt["Statut"]=="Présent"]["Nom"].value_counts().head(10).reset_index(name="Pres")
-                    st.dataframe(tp, use_container_width=True, hide_index=True)
-
-    # ----------------------------------------------------
-    # TAB 2 : ANALYSE
-    # ----------------------------------------------------
-    with t_comp:
-        if df_ana.empty: st.info("Base vide. Allez dans Maintenance."); 
-        else:
-            st.info("📊 Suivez la tendance.")
-            ct1, ct2 = st.tabs(["📉 Évolution Cours", "🆚 Comparateur Périodes"])
-            
-            with ct1:
-                liste_cours = sorted([str(c) for c in df_ana["Cours_Complet"].unique() if str(c) != "nan" and str(c) != "Inconnu"])
-                c_choix = st.selectbox("Choisir un cours :", liste_cours)
-                if c_choix:
-                    sub_c = df_ana[df_ana["Cours_Complet"] == c_choix].groupby("Date_dt").size()
-                    st.line_chart(sub_c)
-            
-            with ct2:
-                if vue == "Semaine":
-                    l_s = sorted(df_ana["Semaine"].unique())
-                    sa = st.selectbox("Sem A", l_s, index=0)
-                    sb = st.selectbox("Sem B", l_s, index=len(l_s)-1 if len(l_s)>0 else 0)
-                    da = df_ana[df_ana["Semaine"]==sa]; db = df_ana[df_ana["Semaine"]==sb]
-                    la = f"Sem {sa}"; lb = f"Sem {sb}"
-                else:
-                    l_m_nums = sorted(df_ana["Mois"].unique())
-                    l_m_names = [mois_map.get(m, str(m)) for m in l_m_nums]
-                    ma_txt = st.selectbox("Mois A", l_m_names, index=0)
-                    mb_txt = st.selectbox("Mois B", l_m_names, index=len(l_m_names)-1 if len(l_m_names)>0 else 0)
-                    ma_num = [k for k, v in mois_map.items() if v == ma_txt][0]
-                    mb_num = [k for k, v in mois_map.items() if v == mb_txt][0]
-                    da = df_ana[df_ana["Mois"]==ma_num]; db = df_ana[df_ana["Mois"]==mb_num]
-                    la = f"{ma_txt}"; lb = f"{mb_txt}"
-                
-                pa = len(da[da["Statut"]=="Présent"]); pb = len(db[db["Statut"]=="Présent"])
-                c1, c2 = st.columns(2)
-                c1.metric(f"Présents {la}", pa)
-                c2.metric(f"Présents {lb}", pb, delta=pb-pa)
-
-    # ----------------------------------------------------
-    # TAB 3 : CONFIG (MODIFIÉ POUR MESSAGE MANUEL)
-    # ----------------------------------------------------
-    with t_conf:
-        st.header("⚙️ Config")
-        c_s, c_m = st.columns(2)
-        with c_s:
-            st.subheader("Paliers Absences")
-            st.number_input("P1", key="p1_val", value=1)
-            st.text_input("Label P1", key="p1_label", value="Mail")
-            st.number_input("P2", key="p2_val", value=3)
-            st.text_input("Label P2", key="p2_label", value="Tel")
-            st.number_input("P3", key="p3_val", value=5)
-            st.text_input("Label P3", key="p3_label", value="RDV")
-        
-        with c_m:
-            st.subheader("Messages Types")
-            if st.button("🔄 Restaurer les modèles par défaut"):
-                st.session_state.msg_tpl = "Bonjour {prenom},\n\nSauf erreur de notre part, nous avons relevé les absences suivantes :\n{details}\n\nMerci de confirmer votre présence."
-                st.session_state.msg_p3_tpl = "Bonjour {prenom},\n\nSuite à de nombreuses absences ({details}), merci de passer à l'accueil."
-                st.session_state.msg_manual_tpl = "Bonjour {nom},\n\nVous avez participé au cours de {cours} le {date} sans inscription.\n\nMerci de vous rapprocher de l'accueil pour régulariser votre compte et vous inscrire via l'application la prochaine fois."
-                st.rerun()
-
-            st.text_area("Msg Absences (Mail)", key="msg_tpl", height=100)
-            st.text_area("Msg Convocation", key="msg_p3_tpl", height=100)
-            
-            st.markdown("**👇 Nouveau : Message Non-Inscrits**")
-            # Valeur par défaut si vide
-            tpl_def_man = "Bonjour {nom},\n\nVous avez participé au cours de {cours} le {date} sans inscription.\n\nMerci de vous rapprocher de l'accueil pour régulariser votre compte et vous inscrire via l'application la prochaine fois."
-            st.text_area("Msg Non-Inscrits", key="msg_manual_tpl", value=st.session_state.get("msg_manual_tpl", tpl_def_man), height=150)
-        
-        if st.button("Sauvegarder Config"): st.success("OK")
-
-    # ----------------------------------------------------
-    # TAB 4 : MAINTENANCE
-    # ----------------------------------------------------
-    with t_maint:
-        st.header("🛠️ Maintenance")
-        st.warning("Attention : Actions irréversibles.")
-        
-        col_import, col_reset = st.columns(2)
-        
-        with col_import:
-            st.subheader("📥 Importer CSV")
-            st.info("Format: nom, prenom, heure_debut, absent...")
-            up_csv = st.file_uploader("Fichier CSV", type=["csv"])
-            
-            if up_csv:
-                if st.button("Lancer Import"):
-                    try:
-                        df_csv = pd.read_csv(up_csv)
-                        df_csv.columns = [c.lower() for c in df_csv.columns]
-                        prog = st.progress(0)
-                        tot = len(df_csv)
-                        for i, row in df_csv.iterrows():
-                            # 1. Nom
-                            nom_brut = str(row.get('nom', '')).upper()
-                            prenom_brut = str(row.get('prenom', ''))
-                            nom_complet = f"{nom_brut} {prenom_brut}".strip() or "Inconnu"
-                            # 2. Date
-                            date_val = str(row.get('date', str(date.today())))
-                            heure_val = str(row.get('heure_debut', '00h00'))
-                            cours_val = str(row.get('cours', 'Inconnu'))
-                            is_absent = str(row.get('absent', '')).lower() == 'true'
-                            statut_val = "Absent" if is_absent else "Présent"
-
-                            rec = {
-                                "Nom": nom_complet,
-                                "Statut": statut_val,
-                                "Date": date_val,
-                                "Cours": cours_val,
-                                "Heure": heure_val,
-                                "Traite": True 
-                            }
-                            table.create(rec)
-                            prog.progress((i + 1) / tot)
-                        prog.empty()
-                        st.success("✅ Import réussi !")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Erreur import : {e}")
-
-        with col_reset:
-            st.subheader("🗑️ Reset Total")
-            if st.checkbox("Confirmer suppression totale"):
-                if st.button("🔥 TOUT VIDER", type="primary"):
-                    try:
-                        ids = [r['id'] for r in table.all()]
-                        if not ids: st.info("Déjà vide.")
-                        else:
-                            prog = st.progress(0)
-                            bs = 10
-                            for i in range(0, len(ids), bs):
-                                batch = ids[i:i + bs]
-                                table.batch_delete(batch)
-                                prog.progress(min((i + bs) / len(ids), 1.0))
-                            prog.empty()
-                            st.success("Base vidée.")
-                            st.rerun()
-                    except Exception as e: st.error(f"Erreur : {e}")
 # =======================
 # 6. ROUTER
 # =======================
@@ -595,11 +369,11 @@ if st.session_state.page == "HUB":
     if c2.button("RÉCEPTION", use_container_width=True): go("REC")
     if c3.button("MANAGER", use_container_width=True): go("MGR")
 elif st.session_state.page == "MN":
-    if st.sidebar.button("🏠"): go("HUB")
+    if st.sidebar.button("🏠 ACCUEIL"): go("HUB")
     show_maitre_nageur()
 elif st.session_state.page == "REC":
-    if st.sidebar.button("🏠"): go("HUB")
+    if st.sidebar.button("🏠 ACCUEIL"): go("HUB")
     show_reception()
 elif st.session_state.page == "MGR":
-    if st.sidebar.button("🏠"): go("HUB")
+    if st.sidebar.button("🏠 ACCUEIL"): go("HUB")
     show_manager()
