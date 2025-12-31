@@ -19,7 +19,7 @@ TABLE_NAME = "Presences"
 # =======================
 st.set_page_config(page_title="Piscine Pro", layout="wide", page_icon="🏊‍♂️")
 
-# --- CSS PERSONNALISÉ (COULEURS + FOOTER) ---
+# --- CSS PERSONNALISÉ (COULEURS + FOOTER DETAILLÉ) ---
 st.markdown("""
     <style>
     /* Style pour PRÉSENT (Vert foncé) */
@@ -57,22 +57,39 @@ st.markdown("""
         padding-top: 10px;
     }
 
-    /* Footer Fixe en bas de page */
+    /* Footer Fixe en bas de page - BANDEAU COMPLET */
     .fixed-footer {
         position: fixed;
         bottom: 0;
         left: 0;
         width: 100%;
         background-color: #1e1e1e;
-        padding: 15px 10px;
+        padding: 10px 20px;
         border-top: 3px solid #4CAF50;
         z-index: 9999;
         box-shadow: 0px -2px 10px rgba(0,0,0,0.5);
+        color: white;
+        font-family: sans-serif;
     }
     
+    .footer-content {
+        display: flex; 
+        justify-content: space-around; 
+        align-items: center; 
+        max-width: 900px; 
+        margin: 0 auto;
+    }
+
+    .footer-stat {
+        text-align: center;
+    }
+    
+    .footer-stat-val { font-size: 1.2rem; font-weight: bold; }
+    .footer-stat-label { font-size: 0.8rem; opacity: 0.8; }
+
     /* Marge en bas pour ne pas cacher le dernier élève derrière le footer */
     .block-container {
-        padding-bottom: 120px;
+        padding-bottom: 140px;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -102,7 +119,42 @@ except Exception as e:
 # =======================
 # 2. FONCTIONS UTILES
 # =======================
+
+def delete_previous_session_records(date_val, heure_val, cours_val):
+    """Supprime les enregistrements existants pour ce créneau précis avant de resauvegarder"""
+    if df_all.empty: return
+    
+    # On cherche les lignes qui correspondent à CE cours
+    # Note : On convertit en string pour comparer car les formats peuvent varier
+    date_str = date_val.strftime("%Y-%m-%d") if isinstance(date_val, (date, datetime)) else str(date_val)
+    
+    mask = (
+        (df_all["Date"] == date_str) & 
+        (df_all["Heure"] == heure_val) & 
+        (df_all["Cours"] == cours_val)
+    )
+    to_delete = df_all[mask]
+    
+    if not to_delete.empty:
+        ids = to_delete['id'].tolist()
+        # Suppression par lots de 10 (limite Airtable)
+        for i in range(0, len(ids), 10):
+            table.batch_delete(ids[i:i+10])
+            
 def save_data_to_cloud(df_new):
+    """Sauvegarde en mode 'Ecraser et Remplacer'"""
+    
+    # 1. Récupérer les infos du cours actuel pour savoir quoi nettoyer
+    first_row = df_new.iloc[0]
+    d_val = first_row["Date"]
+    h_val = first_row["Heure"]
+    c_val = first_row["Cours"]
+    
+    # 2. Supprimer l'ancien appel s'il existe (pour éviter les doublons)
+    with st.spinner("Nettoyage de l'ancien appel..."):
+        delete_previous_session_records(d_val, h_val, c_val)
+    
+    # 3. Créer les nouvelles lignes
     prog = st.progress(0)
     total = len(df_new)
     for i, row in df_new.iterrows():
@@ -121,7 +173,7 @@ def save_data_to_cloud(df_new):
             prog.progress((i + 1) / total)
         except: pass
     prog.empty()
-    st.toast("Sauvegarde OK !", icon="☁️")
+    st.toast("Appel mis à jour avec succès !", icon="💾")
 
 def parse_pdf_complete(file_bytes):
     rows = []
@@ -166,10 +218,9 @@ def parse_pdf_complete(file_bytes):
 def show_maitre_nageur():
     st.title("👨‍🏫 Appel Bassin")
     
-    # Écran de succès après validation
     if st.session_state.get("appel_termine", False):
-        st.success("✅ Enregistré avec succès !")
-        if st.button("Nouveau Scan"):
+        st.success("✅ Appel enregistré et mis à jour !")
+        if st.button("Retour / Nouvel appel"):
             st.session_state.appel_termine = False
             for k in list(st.session_state.keys()):
                 if k.startswith("cb_"): del st.session_state[k]
@@ -177,17 +228,63 @@ def show_maitre_nageur():
         return
 
     # Upload PDF
-    up = st.file_uploader("Charger le PDF", type=["pdf"])
+    up = st.file_uploader("Charger le PDF du cours", type=["pdf"])
+    
     if up:
+        # Chargement initial
         if 'current_file' not in st.session_state or st.session_state.current_file != up.name:
             st.session_state.current_file = up.name
             st.session_state.df_appel = parse_pdf_complete(up.read())
+            # On reset les checkbox au chargement d'un nouveau fichier
+            for k in list(st.session_state.keys()):
+                 if k.startswith("cb_"): del st.session_state[k]
 
         df = st.session_state.df_appel
+        
         if not df.empty:
-            d_aff = df['Date'].iloc[0].strftime('%d/%m/%Y') if isinstance(df['Date'].iloc[0], (date, datetime)) else str(df['Date'].iloc[0])
-            st.info(f"📅 {d_aff} | {df['Cours'].iloc[0]} ({df['Heure'].iloc[0]})")
+            # Infos du cours
+            d_obj = df['Date'].iloc[0]
+            d_aff = d_obj.strftime('%d/%m/%Y') if isinstance(d_obj, (date, datetime)) else str(d_obj)
+            h_cours = df['Heure'].iloc[0]
+            n_cours = df['Cours'].iloc[0]
             
+            st.info(f"📅 {d_aff} | {n_cours} ({h_cours})")
+            
+            # --- LOGIQUE DE RÉCUPÉRATION DU DERNIER APPEL ---
+            # On vérifie si ce cours existe déjà dans la base (df_all)
+            already_exists = False
+            if not df_all.empty:
+                d_str_db = d_obj.strftime("%Y-%m-%d") if isinstance(d_obj, (date, datetime)) else str(d_obj)
+                mask_db = (df_all["Date"] == d_str_db) & (df_all["Heure"] == h_cours) & (df_all["Cours"] == n_cours)
+                if not df_all[mask_db].empty:
+                    already_exists = True
+
+            col_act1, col_act2 = st.columns(2)
+            
+            # Si un appel existe, on propose de le recharger
+            if already_exists:
+                st.warning("⚠️ Un appel a déjà été fait pour ce cours.")
+                if st.button("🔄 REPRENDRE L'APPEL (Afficher Absents)", type="primary", use_container_width=True):
+                    # On recharge les statuts depuis la base
+                    d_str_db = d_obj.strftime("%Y-%m-%d") if isinstance(d_obj, (date, datetime)) else str(d_obj)
+                    mask_db = (df_all["Date"] == d_str_db) & (df_all["Heure"] == h_cours) & (df_all["Cours"] == n_cours)
+                    anciens = df_all[mask_db]
+                    
+                    # On met à jour le dataframe local et les checkbox
+                    for idx, row in df.iterrows():
+                        # On cherche l'élève dans l'ancien appel
+                        found = anciens[anciens["Nom"] == f"{row['Nom']} {row['Prenom']}".strip()]
+                        if not found.empty:
+                            statut_db = found.iloc[0]["Statut"]
+                            # Si statut est "Présent", on coche la case
+                            is_pres = (statut_db == "Présent")
+                            st.session_state[f"cb_{idx}"] = is_pres
+                            df.at[idx, "Absent"] = not is_pres
+                    
+                    # On active le mode retardataire automatiquement
+                    st.session_state["mode_retard"] = True
+                    st.rerun()
+
             # --- BOUTONS GLOBAUX ---
             c1, c2 = st.columns(2)
             if c1.button("✅ TOUT PRÉSENT", use_container_width=True):
@@ -199,7 +296,9 @@ def show_maitre_nageur():
 
             # --- OPTION RETARDATAIRES ---
             st.write("---")
-            mode_retard = st.toggle("🕒 Mode Retardataires (Masquer les présents)")
+            # Utilisation de session_state pour garder l'état du toggle si activé par le bouton "Reprendre"
+            if "mode_retard" not in st.session_state: st.session_state["mode_retard"] = False
+            mode_retard = st.toggle("🕒 Mode Retardataires (Masquer les présents)", key="mode_retard")
             
             # --- LISTE DES ÉLÈVES ---
             st.write("### Liste des élèves")
@@ -241,30 +340,39 @@ def show_maitre_nageur():
                         nr = df.iloc[0].copy()
                         nr["Nom"] = nm; nr["Prenom"] = pr if pr else "(Manuel)"; 
                         nr["Manuel"] = True; nr["Absent"] = False
-                        # On ajoute au DF et on coche la case par défaut
                         st.session_state.df_appel = pd.concat([df, pd.DataFrame([nr])], ignore_index=True)
                         new_idx = len(st.session_state.df_appel) - 1
                         st.session_state[f"cb_{new_idx}"] = True
                         st.rerun()
 
-            # --- FOOTER FIXE (RÉCAP + VALIDATION) ---
+            # --- FOOTER FIXE AVEC BANDEAU DÉTAILLÉ ---
             nb_present = len(df[df["Absent"] == False])
+            nb_absent = len(df[df["Absent"] == True])
             nb_total = len(df)
             
-            # Injection HTML pour le footer fixe
+            # Injection HTML pour le footer avec colonnes
             st.markdown(f"""
             <div class="fixed-footer">
-                <div style="display: flex; justify-content: space-between; align-items: center; max-width: 800px; margin: 0 auto; color: white;">
-                    <div style="font-size: 1.2rem; font-weight: bold;">
-                        Présents : {nb_present} / {nb_total}
+                <div class="footer-content">
+                    <div class="footer-stat">
+                        <div class="footer-stat-val">{nb_total}</div>
+                        <div class="footer-stat-label">TOTAL</div>
                     </div>
+                    <div class="footer-stat" style="color: #4CAF50;">
+                        <div class="footer-stat-val">{nb_present}</div>
+                        <div class="footer-stat-label">PRÉSENTS</div>
                     </div>
+                    <div class="footer-stat" style="color: #f44336;">
+                        <div class="footer-stat-val">{nb_absent}</div>
+                        <div class="footer-stat-label">ABSENTS</div>
+                    </div>
+                </div>
             </div>
             """, unsafe_allow_html=True)
 
-            # Bouton Valider Streamlit standard (il sera juste au dessus du footer visuel ou dedans si CSS ajusté, 
-            # ici on le garde en bas de flux normal mais visible grâce au padding-bottom)
-            if st.button(f"💾 SAUVEGARDER L'APPEL ({nb_present}/{nb_total})", type="primary", use_container_width=True):
+            # Bouton Valider (Pour qu'il soit cliquable, on le laisse dans le flux Streamlit)
+            # Il apparaîtra juste au dessus du bandeau fixe grâce au padding
+            if st.button(f"💾 VALIDER L'APPEL", type="primary", use_container_width=True):
                 save_data_to_cloud(df)
                 st.session_state.appel_termine = True
                 st.rerun()
