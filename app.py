@@ -90,7 +90,7 @@ st.markdown("""
 # =======================
 # 2. CHARGEMENT DONNÉES
 # =======================
-@st.cache_data(ttl=60) # Petit cache pour éviter de requêter Airtable à chaque clic
+@st.cache_data(ttl=60)
 def load_airtable_data():
     try:
         api = Api(API_TOKEN)
@@ -103,7 +103,6 @@ def load_airtable_data():
                 row['id'] = r['id']
                 data.append(row)
             df = pd.DataFrame(data)
-            # Conversion date pour le tri
             if "Date" in df.columns:
                 df["Date_dt"] = pd.to_datetime(df["Date"], errors='coerce')
             return df, table
@@ -118,20 +117,16 @@ df_all, airtable_table = load_airtable_data()
 # =======================
 
 def delete_previous_session_records(date_val, heure_val, cours_val):
-    """Supprime les doublons avant sauvegarde"""
     if df_all.empty or airtable_table is None: return
-    
     date_str = date_val.strftime("%Y-%m-%d") if isinstance(date_val, (date, datetime)) else str(date_val)
     mask = (df_all["Date"] == date_str) & (df_all["Heure"] == heure_val) & (df_all["Cours"] == cours_val)
     to_delete = df_all[mask]
-    
     if not to_delete.empty:
         ids = to_delete['id'].tolist()
         for i in range(0, len(ids), 10):
             airtable_table.batch_delete(ids[i:i+10])
             
 def save_data_to_cloud(df_new):
-    """Sauvegarde et écrase"""
     if airtable_table is None:
         st.error("Erreur connexion Airtable"); return
 
@@ -155,7 +150,6 @@ def save_data_to_cloud(df_new):
         except: pass
     prog.empty()
     st.toast("C'est enregistré !", icon="💾")
-    # On vide le cache pour forcer le rechargement au prochain affichage
     load_airtable_data.clear()
 
 def parse_pdf_complete(file_bytes):
@@ -169,13 +163,11 @@ def parse_pdf_complete(file_bytes):
                 lines = txt.splitlines()
                 d_str = ""; c_name = "Cours Inconnu"; h_deb = "00h00"
                 
-                # Recherche Date
                 for l in lines[:15]:
                     m = re.search(r"\d{2}/\d{2}/\d{4}", l)
                     if m: d_str = m.group(0); break
                 s_date = datetime.strptime(d_str, "%d/%m/%Y").date() if d_str else date.today()
                 
-                # Recherche Heure/Cours
                 for l in lines[:15]:
                     ts = re.findall(r"\d{1,2}h\d{2}", l)
                     if ts:
@@ -218,66 +210,61 @@ def show_maitre_nageur():
             st.rerun()
         return
 
-    # --- PARTIE 1 : CHARGER DERNIER APPEL (LA FONCTION QUI MANQUAIT) ---
-    # On force l'affichage de cette section avant le Drag&Drop
-    
+    # --- PARTIE 1 : BOUTON UNIQUE "DERNIER APPEL" ---
     if 'df_appel' not in st.session_state:
-        st.markdown("### 🔄 Reprendre un appel récent")
-        
         if not df_all.empty and "Date_dt" in df_all.columns:
-            # On trie pour avoir vraiment les derniers en haut
+            # On trie pour avoir le dernier en haut
             df_sorted = df_all.sort_values(["Date_dt", "Heure"], ascending=[False, False])
-            # On dédoublonne sur Date+Heure+Cours
-            df_unique = df_sorted.drop_duplicates(subset=['Date', 'Heure', 'Cours']).head(3)
+            # On ne prend QUE le premier (le plus récent)
+            df_last_session = df_sorted.drop_duplicates(subset=['Date', 'Heure', 'Cours']).head(1)
             
-            if not df_unique.empty:
-                cols = st.columns(len(df_unique))
-                for i, (_, row_sess) in enumerate(df_unique.iterrows()):
-                    # Label du bouton
-                    d_txt = row_sess['Date']
-                    h_txt = row_sess['Heure']
-                    c_txt = row_sess['Cours']
-                    btn_label = f"{c_txt}\n{d_txt} ({h_txt})"
+            if not df_last_session.empty:
+                # Récupération des infos du dernier cours
+                last_row = df_last_session.iloc[0]
+                d_txt = last_row['Date']
+                h_txt = last_row['Heure']
+                c_txt = last_row['Cours']
+                
+                # UN SEUL GROS BOUTON
+                btn_label = f"🔄 REPRENDRE : {c_txt} de {h_txt}"
+                
+                if st.button(btn_label, type="primary", use_container_width=True):
+                    # ACTION : On recharge ce cours spécifique
+                    mask = (df_all["Date"] == last_row['Date']) & \
+                           (df_all["Heure"] == last_row['Heure']) & \
+                           (df_all["Cours"] == last_row['Cours'])
                     
-                    if cols[i].button(btn_label, key=f"reload_{i}", use_container_width=True):
-                        # RECHARGEMENT
-                        mask = (df_all["Date"] == row_sess['Date']) & \
-                               (df_all["Heure"] == row_sess['Heure']) & \
-                               (df_all["Cours"] == row_sess['Cours'])
+                    session_data = df_all[mask].copy()
+                    
+                    # Reconstruction DataFrame
+                    reconstructed = []
+                    for _, r in session_data.iterrows():
+                        reconstructed.append({
+                            "Date": r['Date'], "Cours": r['Cours'], "Heure": r['Heure'],
+                            "Nom": str(r['Nom']), "Prenom": "", 
+                            "Absent": (r['Statut'] == "Absent"),
+                            "Manuel": False
+                        })
+                    
+                    st.session_state.df_appel = pd.DataFrame(reconstructed)
+                    
+                    # --- MAGIE : ON ACTIVE LE MODE RETARDATAIRE DIRECTEMENT ---
+                    st.session_state["mode_retard"] = True 
+                    
+                    # On pré-coche les cases correctement
+                    for idx, row in st.session_state.df_appel.iterrows():
+                        st.session_state[f"cb_{idx}"] = not row["Absent"]
                         
-                        session_data = df_all[mask].copy()
-                        
-                        # Reconstruction du DataFrame local
-                        reconstructed = []
-                        for _, r in session_data.iterrows():
-                            reconstructed.append({
-                                "Date": r['Date'], "Cours": r['Cours'], "Heure": r['Heure'],
-                                "Nom": str(r['Nom']), "Prenom": "", 
-                                "Absent": (r['Statut'] == "Absent"),
-                                "Manuel": False
-                            })
-                        
-                        st.session_state.df_appel = pd.DataFrame(reconstructed)
-                        st.session_state["mode_retard"] = True # On active le mode retardataire auto
-                        
-                        # Synchro des checkbox
-                        for idx, row in st.session_state.df_appel.iterrows():
-                            # Si Absent=False dans la BDD, alors Checkbox=True (Présent)
-                            st.session_state[f"cb_{idx}"] = not row["Absent"]
-                            
-                        st.rerun()
-            else:
-                st.info("Aucun historique récent trouvé.")
-        else:
-            st.info("Base de données vide ou connexion lente...")
+                    st.rerun()
 
         st.write("---")
-        st.markdown("### 📂 Ou charger un nouveau PDF")
+        st.markdown("#### 📂 Ou charger un nouveau PDF")
         up = st.file_uploader("Glisser le fichier planning ici", type=["pdf"])
         if up:
             st.session_state.current_file = up.name
             st.session_state.df_appel = parse_pdf_complete(up.read())
-            # Reset checkbox
+            # Si nouveau PDF, on désactive le mode retardataire par défaut
+            st.session_state["mode_retard"] = False
             for k in list(st.session_state.keys()):
                  if k.startswith("cb_"): del st.session_state[k]
             st.rerun()
@@ -301,15 +288,16 @@ def show_maitre_nageur():
                 st.rerun()
 
             st.write("---")
+            # Le toggle existe toujours mais il est piloté par le bouton "Reprendre"
             if "mode_retard" not in st.session_state: st.session_state["mode_retard"] = False
-            mode_retard = st.toggle("🕒 Mode Retardataires (Afficher uniquement les absents)", key="toggle_retard")
+            mode_retard = st.toggle("🕒 Mode Retardataires (Afficher uniquement les absents)", key="toggle_retard", value=st.session_state["mode_retard"])
             
             # Affichage des élèves
             for idx, row in df.iterrows():
                 k = f"cb_{idx}"
                 if k not in st.session_state: st.session_state[k] = not row["Absent"]
                 
-                # Si mode retardataire et coché présent -> on cache
+                # LOGIQUE D'AFFICHAGE : Si mode retardataire + coché présent => On CACHE
                 if mode_retard and st.session_state[k]:
                     continue
                 
@@ -355,17 +343,14 @@ def show_maitre_nageur():
                 st.rerun()
 
 # =======================
-# 5. AUTRES PAGES (REC / MANAGER)
+# 5. AUTRES PAGES
 # =======================
 def show_reception():
     st.title("💁 Réception")
     if df_all.empty: st.info("Aucune donnée."); return
-    
     t1, t2 = st.tabs(["⚡ ABSENCES", "⚠️ NON INSCRITS"])
     with t1:
-        # Absents non traités et non manuels
         todo = df_all[(df_all["Statut"]=="Absent") & (df_all["Traite"]!=True)]
-        # Exclure les manuels si nécessaire, sinon on les garde
         if todo.empty: st.success("Tout est traité.")
         else:
             cli = st.selectbox("Sélectionner un absent", todo["Nom"].unique())
@@ -373,12 +358,10 @@ def show_reception():
                 sub = todo[todo["Nom"]==cli]
                 st.write(f"{len(sub)} absences.")
                 if st.button("✅ Marquer Traité", key="t_abs"):
-                    for pid in sub['id']: 
-                        airtable_table.update(pid, {"Traite": True})
+                    for pid in sub['id']: airtable_table.update(pid, {"Traite": True})
                     load_airtable_data.clear()
                     st.rerun()
     with t2:
-        # Manuels non traités
         mans = df_all[ (df_all["Nom"].astype(str).str.contains("MANUEL") | (df_all.get("Prenom")=="(Manuel)")) & (df_all["Traite"]!=True) ]
         if mans.empty: st.info("RAS")
         else:
@@ -391,8 +374,7 @@ def show_reception():
 
 def show_manager():
     st.title("📊 Manager")
-    if st.sidebar.text_input("Mot de passe", type="password") != MANAGER_PASSWORD:
-        return
+    if st.sidebar.text_input("Mot de passe", type="password") != MANAGER_PASSWORD: return
     st.metric("Total Enregistrements", len(df_all))
     st.dataframe(df_all, use_container_width=True)
     if st.button("🔥 VIDER BASE"):
@@ -405,7 +387,6 @@ def show_manager():
 # 6. ROUTER
 # =======================
 if 'page' not in st.session_state: st.session_state.page = "HUB"
-
 if st.session_state.page == "HUB":
     st.title("🏊‍♂️ Piscine Pro")
     c1, c2, c3 = st.columns(3)
