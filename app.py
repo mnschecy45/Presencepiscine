@@ -3,6 +3,7 @@ import pandas as pd
 import pdfplumber
 import re
 import io
+import time
 from datetime import datetime, date
 from pyairtable import Api
 
@@ -90,7 +91,7 @@ st.markdown("""
 # =======================
 # 2. CHARGEMENT DONNÉES
 # =======================
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=10) # Cache court pour voir les modifs vite
 def load_airtable_data():
     try:
         api = Api(API_TOKEN)
@@ -133,9 +134,11 @@ def save_data_to_cloud(df_new):
     first_row = df_new.iloc[0]
     d_val = first_row["Date"]; h_val = first_row["Heure"]; c_val = first_row["Cours"]
     
+    # 1. Nettoyage
     with st.spinner("Mise à jour de l'appel..."):
         delete_previous_session_records(d_val, h_val, c_val)
     
+    # 2. Sauvegarde
     prog = st.progress(0); total = len(df_new)
     for i, row in df_new.iterrows():
         try:
@@ -149,8 +152,16 @@ def save_data_to_cloud(df_new):
             prog.progress((i + 1) / total)
         except: pass
     prog.empty()
+    
+    # 3. MEMORISATION IMMEDIATE DU COURS ACTUEL
+    st.session_state['latest_course_context'] = {
+        'Date': d_val,
+        'Heure': h_val,
+        'Cours': c_val
+    }
+    
     st.toast("C'est enregistré !", icon="💾")
-    load_airtable_data.clear()
+    load_airtable_data.clear() # Force le rechargement de la base au prochain passage
 
 def parse_pdf_complete(file_bytes):
     rows = []
@@ -211,60 +222,84 @@ def show_maitre_nageur():
         return
 
     # --- PARTIE 1 : BOUTON UNIQUE "DERNIER APPEL" ---
-    if 'df_appel' not in st.session_state:
-        if not df_all.empty and "Date_dt" in df_all.columns:
-            # On trie pour avoir le dernier en haut
-            df_sorted = df_all.sort_values(["Date_dt", "Heure"], ascending=[False, False])
-            # On ne prend QUE le premier (le plus récent)
-            df_last_session = df_sorted.drop_duplicates(subset=['Date', 'Heure', 'Cours']).head(1)
-            
-            if not df_last_session.empty:
-                # Récupération des infos du dernier cours
-                last_row = df_last_session.iloc[0]
-                d_txt = last_row['Date']
-                h_txt = last_row['Heure']
-                c_txt = last_row['Cours']
-                
-                # UN SEUL GROS BOUTON
-                btn_label = f"🔄 REPRENDRE : {c_txt} de {h_txt}"
-                
-                if st.button(btn_label, type="primary", use_container_width=True):
-                    # ACTION : On recharge ce cours spécifique
-                    mask = (df_all["Date"] == last_row['Date']) & \
-                           (df_all["Heure"] == last_row['Heure']) & \
-                           (df_all["Cours"] == last_row['Cours'])
-                    
-                    session_data = df_all[mask].copy()
-                    
-                    # Reconstruction DataFrame
-                    reconstructed = []
-                    for _, r in session_data.iterrows():
-                        reconstructed.append({
-                            "Date": r['Date'], "Cours": r['Cours'], "Heure": r['Heure'],
-                            "Nom": str(r['Nom']), "Prenom": "", 
-                            "Absent": (r['Statut'] == "Absent"),
-                            "Manuel": False
-                        })
-                    
-                    st.session_state.df_appel = pd.DataFrame(reconstructed)
-                    
-                    # --- MAGIE : ON ACTIVE LE MODE RETARDATAIRE DIRECTEMENT ---
-                    st.session_state["mode_retard"] = True 
-                    
-                    # On pré-coche les cases correctement
-                    for idx, row in st.session_state.df_appel.iterrows():
-                        st.session_state[f"cb_{idx}"] = not row["Absent"]
-                        
-                    st.rerun()
+    # Logique : Soit on a un appel qu'on vient de faire (session), soit on prend le dernier en date (DB)
+    
+    target_course = None
+    
+    # Cas A : On vient juste de sauvegarder un cours (Priorité absolue)
+    if 'latest_course_context' in st.session_state:
+        target_course = st.session_state['latest_course_context']
+    
+    # Cas B : Sinon, on cherche le dernier dans la base Airtable
+    elif not df_all.empty and "Date_dt" in df_all.columns:
+        df_sorted = df_all.sort_values(["Date_dt", "Heure"], ascending=[False, False])
+        df_last = df_sorted.drop_duplicates(subset=['Date', 'Heure', 'Cours']).head(1)
+        if not df_last.empty:
+            last_row = df_last.iloc[0]
+            target_course = {
+                'Date': last_row['Date'],
+                'Heure': last_row['Heure'],
+                'Cours': last_row['Cours']
+            }
 
+    if 'df_appel' not in st.session_state and target_course:
+        # Affichage du bouton
+        d_aff = target_course['Date']
+        if isinstance(d_aff, (date, datetime)): d_aff = d_aff.strftime("%d/%m/%Y") # ou le format brut de Airtable
+        else: d_aff = str(d_aff) # Securité
+
+        btn_label = f"🔄 REPRENDRE : {target_course['Cours']} ({d_aff} à {target_course['Heure']})"
+        
+        if st.button(btn_label, type="primary", use_container_width=True):
+            # RECHARGEMENT
+            # Attention : il faut s'assurer que df_all est à jour si on vient de save
+            # On force un petit reload si besoin, mais normalement load_airtable_data le gère
+            
+            # Re-filtrage sur df_all (même s'il est pas 100% frais, on espère que cache clear a marché)
+            # Pour la date, on compare en string pour éviter les soucis de type
+            d_target_str = target_course['Date']
+            if isinstance(d_target_str, (date, datetime)): d_target_str = d_target_str.strftime("%Y-%m-%d")
+            
+            # On filtre df_all en convertissant la colonne Date en string pour comparer
+            df_all['Date_Str'] = df_all['Date'].apply(lambda x: x.strftime("%Y-%m-%d") if isinstance(x, (date, datetime)) else str(x))
+            
+            mask = (df_all["Date_Str"] == d_target_str) & \
+                   (df_all["Heure"] == target_course['Heure']) & \
+                   (df_all["Cours"] == target_course['Cours'])
+            
+            session_data = df_all[mask].copy()
+            
+            if session_data.empty:
+                st.warning("Données en cours d'écriture... Réessayez dans 5 secondes.")
+                load_airtable_data.clear()
+            else:
+                reconstructed = []
+                for _, r in session_data.iterrows():
+                    reconstructed.append({
+                        "Date": r['Date'], "Cours": r['Cours'], "Heure": r['Heure'],
+                        "Nom": str(r['Nom']), "Prenom": "", 
+                        "Absent": (r['Statut'] == "Absent"),
+                        "Manuel": False
+                    })
+                
+                st.session_state.df_appel = pd.DataFrame(reconstructed)
+                st.session_state["mode_retard"] = True # Active mode retardataire
+                
+                for idx, row in st.session_state.df_appel.iterrows():
+                    st.session_state[f"cb_{idx}"] = not row["Absent"]
+                    
+                st.rerun()
+
+    if 'df_appel' not in st.session_state:
         st.write("---")
         st.markdown("#### 📂 Ou charger un nouveau PDF")
         up = st.file_uploader("Glisser le fichier planning ici", type=["pdf"])
         if up:
             st.session_state.current_file = up.name
             st.session_state.df_appel = parse_pdf_complete(up.read())
-            # Si nouveau PDF, on désactive le mode retardataire par défaut
             st.session_state["mode_retard"] = False
+            # Si on charge un nouveau, on oublie le contexte précédent
+            if 'latest_course_context' in st.session_state: del st.session_state['latest_course_context']
             for k in list(st.session_state.keys()):
                  if k.startswith("cb_"): del st.session_state[k]
             st.rerun()
@@ -288,16 +323,13 @@ def show_maitre_nageur():
                 st.rerun()
 
             st.write("---")
-            # Le toggle existe toujours mais il est piloté par le bouton "Reprendre"
             if "mode_retard" not in st.session_state: st.session_state["mode_retard"] = False
             mode_retard = st.toggle("🕒 Mode Retardataires (Afficher uniquement les absents)", key="toggle_retard", value=st.session_state["mode_retard"])
             
-            # Affichage des élèves
             for idx, row in df.iterrows():
                 k = f"cb_{idx}"
                 if k not in st.session_state: st.session_state[k] = not row["Absent"]
                 
-                # LOGIQUE D'AFFICHAGE : Si mode retardataire + coché présent => On CACHE
                 if mode_retard and st.session_state[k]:
                     continue
                 
