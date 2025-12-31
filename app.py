@@ -15,14 +15,13 @@ BASE_ID = "app390ytx6oa2rbge"
 TABLE_NAME = "Presences"
 
 # =======================
-# 1. CONFIGURATION & STYLE
+# 1. CONFIGURATION & STYLE CSS
 # =======================
 st.set_page_config(page_title="Piscine Pro", layout="wide", page_icon="🏊‍♂️")
 
-# --- CSS PERSONNALISÉ (COULEURS + FOOTER DETAILLÉ) ---
 st.markdown("""
     <style>
-    /* Style pour PRÉSENT (Vert foncé) */
+    /* 1. Style pour PRÉSENT (Vert foncé - Texte Blanc) */
     .student-box-present {
         background-color: #1b5e20;
         color: white;
@@ -35,7 +34,7 @@ st.markdown("""
         border: 1px solid #144a17;
     }
     
-    /* Style pour ABSENT (Rouge vif) */
+    /* 2. Style pour ABSENT (Rouge vif - Texte Blanc) */
     .student-box-absent {
         background-color: #b71c1c; 
         color: white;
@@ -48,7 +47,7 @@ st.markdown("""
         border: 1px solid #7f0000;
     }
 
-    /* Checkbox centré verticalement */
+    /* 3. Checkbox centré verticalement */
     .stCheckbox {
         display: flex;
         align-items: center;
@@ -57,16 +56,16 @@ st.markdown("""
         padding-top: 10px;
     }
 
-    /* Footer Fixe en bas de page - BANDEAU COMPLET */
+    /* 4. Footer Fixe (Bandeau noir en bas) */
     .fixed-footer {
         position: fixed;
         bottom: 0;
         left: 0;
         width: 100%;
         background-color: #1e1e1e;
-        padding: 10px 20px;
+        padding: 10px 0;
         border-top: 3px solid #4CAF50;
-        z-index: 9999;
+        z-index: 9990;
         box-shadow: 0px -2px 10px rgba(0,0,0,0.5);
         color: white;
         font-family: sans-serif;
@@ -76,20 +75,17 @@ st.markdown("""
         display: flex; 
         justify-content: space-around; 
         align-items: center; 
-        max-width: 900px; 
+        max-width: 800px; 
         margin: 0 auto;
     }
 
-    .footer-stat {
-        text-align: center;
-    }
-    
+    .footer-stat { text-align: center; }
     .footer-stat-val { font-size: 1.2rem; font-weight: bold; }
-    .footer-stat-label { font-size: 0.8rem; opacity: 0.8; }
+    .footer-stat-label { font-size: 0.7rem; opacity: 0.8; text-transform: uppercase; }
 
-    /* Marge en bas pour ne pas cacher le dernier élève derrière le footer */
+    /* 5. Marge en bas pour ne pas cacher le dernier élève derrière le footer */
     .block-container {
-        padding-bottom: 140px;
+        padding-bottom: 150px;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -117,15 +113,13 @@ except Exception as e:
     df_all = pd.DataFrame()
 
 # =======================
-# 2. FONCTIONS UTILES
+# 2. FONCTIONS UTILES (LOGIQUE METIER)
 # =======================
 
 def delete_previous_session_records(date_val, heure_val, cours_val):
     """Supprime les enregistrements existants pour ce créneau précis avant de resauvegarder"""
     if df_all.empty: return
     
-    # On cherche les lignes qui correspondent à CE cours
-    # Note : On convertit en string pour comparer car les formats peuvent varier
     date_str = date_val.strftime("%Y-%m-%d") if isinstance(date_val, (date, datetime)) else str(date_val)
     
     mask = (
@@ -137,24 +131,22 @@ def delete_previous_session_records(date_val, heure_val, cours_val):
     
     if not to_delete.empty:
         ids = to_delete['id'].tolist()
-        # Suppression par lots de 10 (limite Airtable)
         for i in range(0, len(ids), 10):
             table.batch_delete(ids[i:i+10])
             
 def save_data_to_cloud(df_new):
     """Sauvegarde en mode 'Ecraser et Remplacer'"""
-    
-    # 1. Récupérer les infos du cours actuel pour savoir quoi nettoyer
+    # 1. Infos du cours
     first_row = df_new.iloc[0]
     d_val = first_row["Date"]
     h_val = first_row["Heure"]
     c_val = first_row["Cours"]
     
-    # 2. Supprimer l'ancien appel s'il existe (pour éviter les doublons)
-    with st.spinner("Nettoyage de l'ancien appel..."):
+    # 2. Nettoyage ancien appel
+    with st.spinner("Mise à jour de l'appel..."):
         delete_previous_session_records(d_val, h_val, c_val)
     
-    # 3. Créer les nouvelles lignes
+    # 3. Création nouveaux records
     prog = st.progress(0)
     total = len(df_new)
     for i, row in df_new.iterrows():
@@ -173,7 +165,7 @@ def save_data_to_cloud(df_new):
             prog.progress((i + 1) / total)
         except: pass
     prog.empty()
-    st.toast("Appel mis à jour avec succès !", icon="💾")
+    st.toast("C'est enregistré !", icon="💾")
 
 def parse_pdf_complete(file_bytes):
     rows = []
@@ -213,79 +205,100 @@ def parse_pdf_complete(file_bytes):
     return pd.DataFrame(rows)
 
 # =======================
-# 3. MAÎTRE-NAGEUR (REFONDU)
+# 3. MAÎTRE-NAGEUR (INTERFACE COMPLETE)
 # =======================
 def show_maitre_nageur():
     st.title("👨‍🏫 Appel Bassin")
     
+    # --- ECRAN SUCCES ---
     if st.session_state.get("appel_termine", False):
-        st.success("✅ Appel enregistré et mis à jour !")
-        if st.button("Retour / Nouvel appel"):
+        st.success("✅ Appel mis à jour avec succès !")
+        if st.button("Retour à l'accueil"):
             st.session_state.appel_termine = False
+            if 'df_appel' in st.session_state: del st.session_state.df_appel
+            if 'current_file' in st.session_state: del st.session_state.current_file
+            # Reset checkbox keys
             for k in list(st.session_state.keys()):
                 if k.startswith("cb_"): del st.session_state[k]
             st.rerun()
         return
 
-    # Upload PDF
-    up = st.file_uploader("Charger le PDF du cours", type=["pdf"])
-    
-    if up:
-        # Chargement initial
-        if 'current_file' not in st.session_state or st.session_state.current_file != up.name:
-            st.session_state.current_file = up.name
-            st.session_state.df_appel = parse_pdf_complete(up.read())
-            # On reset les checkbox au chargement d'un nouveau fichier
-            for k in list(st.session_state.keys()):
-                 if k.startswith("cb_"): del st.session_state[k]
-
-        df = st.session_state.df_appel
+    # --- ZONE 1 : REPRISE RAPIDE (RETARDATAIRES) ---
+    # On regarde si on a des cours dans la base pour proposer des boutons
+    if not df_all.empty and 'df_appel' not in st.session_state:
+        # Création d'une vue unique des sessions (Date + Heure + Cours)
+        df_unique = df_all.drop_duplicates(subset=['Date', 'Heure', 'Cours']).copy()
+        if "Date_dt" in df_unique.columns:
+            df_unique = df_unique.sort_values("Date_dt", ascending=False)
         
-        if not df.empty:
-            # Infos du cours
-            d_obj = df['Date'].iloc[0]
-            d_aff = d_obj.strftime('%d/%m/%Y') if isinstance(d_obj, (date, datetime)) else str(d_obj)
-            h_cours = df['Heure'].iloc[0]
-            n_cours = df['Cours'].iloc[0]
+        # On prend les 3 derniers cours
+        recent_sessions = df_unique.head(3) 
+        
+        if not recent_sessions.empty:
+            st.subheader("🔄 Reprendre un appel (Retardataires)")
+            cols = st.columns(len(recent_sessions))
             
-            st.info(f"📅 {d_aff} | {n_cours} ({h_cours})")
-            
-            # --- LOGIQUE DE RÉCUPÉRATION DU DERNIER APPEL ---
-            # On vérifie si ce cours existe déjà dans la base (df_all)
-            already_exists = False
-            if not df_all.empty:
-                d_str_db = d_obj.strftime("%Y-%m-%d") if isinstance(d_obj, (date, datetime)) else str(d_obj)
-                mask_db = (df_all["Date"] == d_str_db) & (df_all["Heure"] == h_cours) & (df_all["Cours"] == n_cours)
-                if not df_all[mask_db].empty:
-                    already_exists = True
-
-            col_act1, col_act2 = st.columns(2)
-            
-            # Si un appel existe, on propose de le recharger
-            if already_exists:
-                st.warning("⚠️ Un appel a déjà été fait pour ce cours.")
-                if st.button("🔄 REPRENDRE L'APPEL (Afficher Absents)", type="primary", use_container_width=True):
-                    # On recharge les statuts depuis la base
-                    d_str_db = d_obj.strftime("%Y-%m-%d") if isinstance(d_obj, (date, datetime)) else str(d_obj)
-                    mask_db = (df_all["Date"] == d_str_db) & (df_all["Heure"] == h_cours) & (df_all["Cours"] == n_cours)
-                    anciens = df_all[mask_db]
+            for i, (_, row_sess) in enumerate(recent_sessions.iterrows()):
+                d_txt = row_sess['Date']
+                h_txt = row_sess['Heure']
+                c_txt = row_sess['Cours']
+                label_btn = f"{c_txt}\n{d_txt} à {h_txt}"
+                
+                if cols[i].button(label_btn, key=f"hist_{i}", use_container_width=True):
+                    # ACTION : On recharge depuis la base
+                    mask = (df_all["Date"] == row_sess['Date']) & \
+                           (df_all["Heure"] == row_sess['Heure']) & \
+                           (df_all["Cours"] == row_sess['Cours'])
+                    session_data = df_all[mask].copy()
                     
-                    # On met à jour le dataframe local et les checkbox
-                    for idx, row in df.iterrows():
-                        # On cherche l'élève dans l'ancien appel
-                        found = anciens[anciens["Nom"] == f"{row['Nom']} {row['Prenom']}".strip()]
-                        if not found.empty:
-                            statut_db = found.iloc[0]["Statut"]
-                            # Si statut est "Présent", on coche la case
-                            is_pres = (statut_db == "Présent")
-                            st.session_state[f"cb_{idx}"] = is_pres
-                            df.at[idx, "Absent"] = not is_pres
+                    reconstructed_rows = []
+                    for _, r in session_data.iterrows():
+                        reconstructed_rows.append({
+                            "Date": r['Date'],
+                            "Cours": r['Cours'],
+                            "Heure": r['Heure'],
+                            "Nom": str(r['Nom']), 
+                            "Prenom": "", 
+                            "Absent": (r['Statut'] == "Absent"),
+                            "Manuel": False,
+                            "Session_ID": f"{r['Date']}_{r['Heure']}"
+                        })
                     
-                    # On active le mode retardataire automatiquement
-                    st.session_state["mode_retard"] = True
+                    st.session_state.df_appel = pd.DataFrame(reconstructed_rows)
+                    st.session_state["mode_retard"] = True # On active le mode retardataire direct
+                    
+                    # On pré-coche les cases (Si Absent=False -> Checkbox=True)
+                    for idx, row in st.session_state.df_appel.iterrows():
+                        st.session_state[f"cb_{idx}"] = not row["Absent"] 
+                    
                     st.rerun()
 
-            # --- BOUTONS GLOBAUX ---
+    # --- ZONE 2 : UPLOAD PDF ---
+    if 'df_appel' not in st.session_state:
+        st.write("---")
+        st.write("#### 📂 Ou commencer un nouvel appel")
+        up = st.file_uploader("Glisser le PDF ici", type=["pdf"])
+        
+        if up:
+            st.session_state.current_file = up.name
+            st.session_state.df_appel = parse_pdf_complete(up.read())
+            # Reset checkbox keys
+            for k in list(st.session_state.keys()):
+                 if k.startswith("cb_"): del st.session_state[k]
+            st.rerun()
+
+    # --- ZONE 3 : LA LISTE D'APPEL ---
+    if 'df_appel' in st.session_state:
+        df = st.session_state.df_appel
+        if not df.empty:
+            # Infos
+            row1 = df.iloc[0]
+            d_aff = row1['Date']
+            if isinstance(d_aff, (date, datetime)): d_aff = d_aff.strftime('%d/%m/%Y')
+            
+            st.markdown(f"### 📅 {d_aff} | {row1['Cours']} ({row1['Heure']})")
+            
+            # Boutons globaux
             c1, c2 = st.columns(2)
             if c1.button("✅ TOUT PRÉSENT", use_container_width=True):
                 for i in range(len(df)): st.session_state[f"cb_{i}"] = True
@@ -294,91 +307,73 @@ def show_maitre_nageur():
                 for i in range(len(df)): st.session_state[f"cb_{i}"] = False
                 st.rerun()
 
-            # --- OPTION RETARDATAIRES ---
             st.write("---")
-            # Utilisation de session_state pour garder l'état du toggle si activé par le bouton "Reprendre"
+            
+            # Toggle Retardataire
             if "mode_retard" not in st.session_state: st.session_state["mode_retard"] = False
-            mode_retard = st.toggle("🕒 Mode Retardataires (Masquer les présents)", key="mode_retard")
+            mode_retard = st.toggle("🕒 Mode Retardataires (Masquer les présents déjà validés)", key="toggle_retard")
             
-            # --- LISTE DES ÉLÈVES ---
-            st.write("### Liste des élèves")
-            
+            # La boucle d'affichage des élèves
             for idx, row in df.iterrows():
                 k = f"cb_{idx}"
-                # Initialisation de la checkbox si inexistante
-                if k not in st.session_state: st.session_state[k] = False
+                # Init checkbox si elle n'existe pas
+                if k not in st.session_state: st.session_state[k] = not row["Absent"]
                 
-                # Si mode retardataire activé ET que l'élève est présent, on saute l'affichage
+                # Masquage dynamique
                 if mode_retard and st.session_state[k]:
                     continue
                 
-                # Layout Mobile : Checkbox à gauche (petite), Nom coloré à droite (grand)
+                # Layout
                 col_check, col_name = st.columns([1, 4])
-                
                 with col_check:
-                    # Checkbox qui contrôle l'état
                     st.checkbox("P", key=k, label_visibility="collapsed")
                 
                 with col_name:
-                    nom_complet = f"{row['Nom']} {row['Prenom']}"
-                    # Affichage conditionnel Rouge/Vert selon la checkbox
+                    nom_complet = f"{row['Nom']} {row['Prenom']}".strip()
                     if st.session_state[k]:
                         st.markdown(f'<div class="student-box-present">{nom_complet}</div>', unsafe_allow_html=True)
                     else:
                         st.markdown(f'<div class="student-box-absent">{nom_complet}</div>', unsafe_allow_html=True)
                 
-                # Mise à jour du DataFrame en temps réel
+                # Update DF
                 df.at[idx, "Absent"] = not st.session_state[k]
 
-            # --- AJOUT MANUEL ---
+            # Ajout manuel
             st.write("---")
             with st.expander("➕ Ajouter un élève manuellement"):
                 with st.form("add"):
-                    nm = st.text_input("Nom de famille").upper()
-                    pr = st.text_input("Prénom")
+                    nm = st.text_input("Nom").upper()
                     if st.form_submit_button("Ajouter"):
                         nr = df.iloc[0].copy()
-                        nr["Nom"] = nm; nr["Prenom"] = pr if pr else "(Manuel)"; 
-                        nr["Manuel"] = True; nr["Absent"] = False
+                        nr["Nom"] = nm; nr["Prenom"] = "(Manuel)"; nr["Manuel"] = True; nr["Absent"] = False
                         st.session_state.df_appel = pd.concat([df, pd.DataFrame([nr])], ignore_index=True)
                         new_idx = len(st.session_state.df_appel) - 1
                         st.session_state[f"cb_{new_idx}"] = True
                         st.rerun()
 
-            # --- FOOTER FIXE AVEC BANDEAU DÉTAILLÉ ---
+            # --- FOOTER FIXE ---
             nb_present = len(df[df["Absent"] == False])
             nb_absent = len(df[df["Absent"] == True])
             nb_total = len(df)
             
-            # Injection HTML pour le footer avec colonnes
             st.markdown(f"""
             <div class="fixed-footer">
                 <div class="footer-content">
-                    <div class="footer-stat">
-                        <div class="footer-stat-val">{nb_total}</div>
-                        <div class="footer-stat-label">TOTAL</div>
-                    </div>
-                    <div class="footer-stat" style="color: #4CAF50;">
-                        <div class="footer-stat-val">{nb_present}</div>
-                        <div class="footer-stat-label">PRÉSENTS</div>
-                    </div>
-                    <div class="footer-stat" style="color: #f44336;">
-                        <div class="footer-stat-val">{nb_absent}</div>
-                        <div class="footer-stat-label">ABSENTS</div>
-                    </div>
+                    <div class="footer-stat"><div class="footer-stat-val">{nb_total}</div><div class="footer-stat-label">TOTAL</div></div>
+                    <div class="footer-stat" style="color: #4CAF50;"><div class="footer-stat-val">{nb_present}</div><div class="footer-stat-label">PRÉSENTS</div></div>
+                    <div class="footer-stat" style="color: #f44336;"><div class="footer-stat-val">{nb_absent}</div><div class="footer-stat-label">ABSENTS</div></div>
                 </div>
             </div>
             """, unsafe_allow_html=True)
 
-            # Bouton Valider (Pour qu'il soit cliquable, on le laisse dans le flux Streamlit)
-            # Il apparaîtra juste au dessus du bandeau fixe grâce au padding
-            if st.button(f"💾 VALIDER L'APPEL", type="primary", use_container_width=True):
+            # Bouton Valider (Streamlit Button)
+            if st.button(f"💾 SAUVEGARDER L'APPEL", type="primary", use_container_width=True):
                 save_data_to_cloud(df)
                 st.session_state.appel_termine = True
                 st.rerun()
 
 # =======================
-# 4. RÉCEPTION (AVEC FIX)
+# 4. RÉCEPTION (STANDARD)
 # =======================
 def show_reception():
     st.title("💁 Réception")
@@ -441,21 +436,20 @@ def show_reception():
         st.dataframe(done, use_container_width=True)
 
 # =======================
-# 5. MANAGER
+# 5. MANAGER (STANDARD)
 # =======================
 def show_manager():
     st.title("📊 Manager")
     if st.sidebar.text_input("Mdp", type="password") != MANAGER_PASSWORD:
         st.warning("Accès refusé"); return
     
-    # Simple vue des stats
     if not df_all.empty:
         tot = len(df_all)
         pres = len(df_all[df_all["Statut"]=="Présent"])
-        st.metric("Taux de présence global", f"{pres/tot*100:.1f}%")
+        taux = (pres/tot*100) if tot > 0 else 0
+        st.metric("Taux de présence global", f"{taux:.1f}%")
         st.dataframe(df_all)
     
-    # Bouton Reset
     if st.checkbox("Activer suppression"):
         if st.button("🔥 VIDER LA BASE", type="primary"):
             ids = [r['id'] for r in table.all()]
@@ -465,7 +459,7 @@ def show_manager():
             st.rerun()
 
 # =======================
-# 6. ROUTER
+# 6. ROUTER (NAVIGATION)
 # =======================
 if 'page' not in st.session_state: st.session_state.page = "HUB"
 def go(p): st.session_state.page = p; st.rerun()
