@@ -87,17 +87,18 @@ st.markdown("""
     /* Marge bas de page */
     .block-container { padding-bottom: 150px; }
     
-    /* Style Metrics Manager */
+    /* Métriques Manager */
     [data-testid="stMetric"] {
         background-color: #f0f2f6;
-        padding: 10px;
-        border-radius: 5px;
+        padding: 15px;
+        border-radius: 10px;
+        border: 1px solid #e0e0e0;
     }
     </style>
 """, unsafe_allow_html=True)
 
 # =======================
-# 2. CHARGEMENT DONNÉES
+# 2. CHARGEMENT DONNÉES (SÉCURISÉ)
 # =======================
 @st.cache_data(ttl=5)
 def load_airtable_data():
@@ -105,25 +106,44 @@ def load_airtable_data():
         api = Api(API_TOKEN)
         table = api.table(BASE_ID, TABLE_NAME)
         records = table.all()
-        if records:
-            data = []
-            for r in records:
-                row = r['fields']
-                row['id'] = r['id']
-                data.append(row)
-            df = pd.DataFrame(data)
-            if "Date" in df.columns:
-                df["Date_dt"] = pd.to_datetime(df["Date"], errors='coerce')
-                # Création colonnes utiles pour manager
-                df["Annee"] = df["Date_dt"].dt.year
-                df["Mois"] = df["Date_dt"].dt.month
-                df["Semaine"] = df["Date_dt"].dt.isocalendar().week
-                jour_map = {0:"Lundi", 1:"Mardi", 2:"Mercredi", 3:"Jeudi", 4:"Vendredi", 5:"Samedi", 6:"Dimanche"}
-                df["Jour"] = df["Date_dt"].dt.dayofweek.map(jour_map)
-            return df, table
-        return pd.DataFrame(), table
+        
+        # Structure de base vide si aucun enregistrement
+        if not records:
+            return pd.DataFrame(columns=["Nom", "Prenom", "Date", "Heure", "Cours", "Statut", "Manuel", "Traite"]), table
+
+        data = []
+        for r in records:
+            row = r['fields']
+            row['id'] = r['id']
+            data.append(row)
+        
+        df = pd.DataFrame(data)
+        
+        # --- CORRECTION DU BUG KEYERROR ---
+        # On s'assure que toutes les colonnes existent, même vides
+        expected_cols = ["Nom", "Prenom", "Date", "Heure", "Cours", "Statut", "Manuel", "Traite"]
+        for col in expected_cols:
+            if col not in df.columns:
+                df[col] = None # On crée la colonne vide si elle manque
+
+        # Conversion des types
+        if "Date" in df.columns:
+            df["Date_dt"] = pd.to_datetime(df["Date"], errors='coerce')
+            df["Annee"] = df["Date_dt"].dt.year
+            df["Mois"] = df["Date_dt"].dt.month
+            df["Semaine"] = df["Date_dt"].dt.isocalendar().week
+            jour_map = {0:"Lundi", 1:"Mardi", 2:"Mercredi", 3:"Jeudi", 4:"Vendredi", 5:"Samedi", 6:"Dimanche"}
+            df["Jour"] = df["Date_dt"].dt.dayofweek.map(jour_map)
+            
+        # Remplissage des valeurs nulles pour éviter les plantages
+        df["Prenom"] = df["Prenom"].fillna("")
+        df["Manuel"] = df["Manuel"].fillna(False)
+        df["Traite"] = df["Traite"].fillna(False)
+
+        return df, table
     except Exception as e:
-        return pd.DataFrame(), None
+        # En cas de gros crash connexion, on retourne un DF vide mais avec les bonnes colonnes
+        return pd.DataFrame(columns=["Nom", "Prenom", "Date", "Heure", "Cours", "Statut", "Manuel", "Traite"]), None
 
 df_all, airtable_table = load_airtable_data()
 
@@ -135,10 +155,11 @@ def delete_previous_session_records(date_val, heure_val, cours_val):
     if df_all.empty or airtable_table is None: return
     d_str = date_val.strftime("%Y-%m-%d") if isinstance(date_val, (date, datetime)) else str(date_val)
     
+    # Filtre sur string pour être sûr
     df_temp = df_all.copy()
     df_temp['Date_Str'] = df_temp['Date'].apply(lambda x: x if isinstance(x, str) else str(x))
     
-    mask = (df_temp["Date"] == d_str) & (df_temp["Heure"] == heure_val) & (df_temp["Cours"] == cours_val)
+    mask = (df_temp["Date_Str"] == d_str) & (df_temp["Heure"] == heure_val) & (df_temp["Cours"] == cours_val)
     to_delete = df_temp[mask]
     
     if not to_delete.empty:
@@ -167,7 +188,8 @@ def save_data_to_cloud(df_new):
                 "Nom": str(row["Nom"]), "Statut": statut, "Date": d_str,
                 "Cours": str(row["Cours"]), "Heure": str(row["Heure"]), 
                 "Traite": False,
-                "Manuel": is_manuel 
+                "Manuel": is_manuel,
+                "Prenom": str(row.get("Prenom", ""))
             }
             airtable_table.create(rec)
             prog.progress((i + 1) / total)
@@ -266,7 +288,7 @@ def show_maitre_nageur():
                 for _, r in session_data.iterrows():
                     reconstructed.append({
                         "Date": r['Date'], "Cours": r['Cours'], "Heure": r['Heure'],
-                        "Nom": str(r['Nom']), "Prenom": "", 
+                        "Nom": str(r['Nom']), "Prenom": str(r.get("Prenom", "")), 
                         "Absent": (r['Statut'] == "Absent"),
                         "Manuel": True if r.get("Manuel") else False
                     })
@@ -357,17 +379,24 @@ def show_reception():
     st.title("💁 Réception")
     if df_all.empty: st.info("Aucune donnée."); return
     
-    # 1. TEMPLATES MESSAGES
+    # Init templates
     if "tpl_abs" not in st.session_state:
         st.session_state.tpl_abs = "Bonjour {nom},\n\nSauf erreur de notre part, nous avons relevé les absences suivantes :\n{details}\nMerci de nous confirmer votre situation.\n\nCordialement."
     if "tpl_man" not in st.session_state:
-        st.session_state.tpl_man = "Bonjour {nom},\n\nVous avez participé au cours de {cours} le {date} sans inscription préalable.\n\nMerci de bien vouloir régulariser votre passage à l'accueil ou de penser à réserver via l'application la prochaine fois.\n\nCordialement."
+        st.session_state.tpl_man = "Bonjour {nom},\n\nVous avez participé au cours de {cours} le {date} sans inscription préalable.\n\nMerci de bien vouloir régulariser votre passage à l'accueil.\n\nCordialement."
 
     t1, t2 = st.tabs(["⚡ ABSENCES", "⚠️ NON INSCRITS"])
     
     # --- ONGLET 1 : ABSENCES ---
     with t1:
-        todo = df_all[(df_all["Statut"]=="Absent") & (df_all["Traite"]!=True)]
+        # Sécurisation du filtre
+        mask_abs = (df_all["Statut"]=="Absent") & (df_all["Traite"]!=True)
+        # On exclut ceux marqués "Manuel" s'ils sont dans les absents par erreur
+        if "Manuel" in df_all.columns:
+            mask_abs = mask_abs & (df_all["Manuel"] == False)
+        
+        todo = df_all[mask_abs]
+        
         if todo.empty: st.success("Tout est traité.")
         else:
             cli = st.selectbox("Sélectionner un absent", todo["Nom"].unique())
@@ -390,9 +419,11 @@ def show_reception():
 
     # --- ONGLET 2 : NON INSCRITS (MANUELS) ---
     with t2:
+        # On cherche les Manuels non traités
         if "Manuel" in df_all.columns:
             mans = df_all[ (df_all["Manuel"] == True) & (df_all["Traite"]!=True) ]
         else:
+            # Fallback
             mans = df_all[ (df_all["Prenom"] == "(Manuel)") & (df_all["Traite"]!=True) ]
 
         if mans.empty: st.info("RAS - Aucun passage non-inscrit à traiter.")
@@ -428,14 +459,38 @@ def show_manager():
         return
 
     # ONGLETS DU MANAGER
-    tab_dash, tab_ana, tab_conf, tab_maint = st.tabs(["📈 DASHBOARD", "🔎 ANALYSE", "⚙️ CONFIG MESSAGES", "🛠️ MAINTENANCE"])
+    tab_dash, tab_conf, tab_maint = st.tabs(["📈 DASHBOARD", "⚙️ CONFIG MESSAGES", "🛠️ MAINTENANCE"])
 
     # --- 1. DASHBOARD ---
     with tab_dash:
+        # FILTRES
+        st.subheader("📅 Période & Filtres")
+        col_f1, col_f2 = st.columns(2)
+        
+        # Filtre Année
+        annees = sorted(df_all["Annee"].dropna().unique(), reverse=True)
+        sel_annee = col_f1.selectbox("Année", annees)
+        df_yr = df_all[df_all["Annee"] == sel_annee]
+        
+        # Filtre Mois
+        mois_map = {1: "Janvier", 2: "Février", 3: "Mars", 4: "Avril", 5: "Mai", 6: "Juin",
+            7: "Juillet", 8: "Août", 9: "Septembre", 10: "Octobre", 11: "Novembre", 12: "Décembre"}
+        mois_dispo = sorted(df_yr["Mois"].dropna().unique())
+        mois_noms = ["TOUS"] + [mois_map[m] for m in mois_dispo]
+        sel_mois = col_f2.selectbox("Mois", mois_noms)
+        
+        if sel_mois != "TOUS":
+            mois_num = [k for k,v in mois_map.items() if v == sel_mois][0]
+            df_filt = df_yr[df_yr["Mois"] == mois_num]
+        else:
+            df_filt = df_yr
+
+        st.write("---")
+
         # KPI
-        nb_tot = len(df_all)
-        nb_pres = len(df_all[df_all["Statut"]=="Présent"])
-        nb_abs = len(df_all[df_all["Statut"]=="Absent"])
+        nb_tot = len(df_filt)
+        nb_pres = len(df_filt[df_filt["Statut"]=="Présent"])
+        nb_abs = len(df_filt[df_filt["Statut"]=="Absent"])
         taux = (nb_pres/nb_tot*100) if nb_tot > 0 else 0
         
         c1, c2, c3 = st.columns(3)
@@ -447,30 +502,42 @@ def show_manager():
         
         # GRAPHIQUES
         c_g1, c_g2 = st.columns(2)
+        
         with c_g1:
-            st.subheader("Fréquentation par Jour")
-            if "Jour" in df_all.columns:
-                chart_j = alt.Chart(df_all[df_all["Statut"]=="Présent"]).mark_bar().encode(
+            st.subheader("📈 Évolution")
+            if not df_filt.empty:
+                chart_evo = alt.Chart(df_filt[df_filt["Statut"]=="Présent"]).mark_area(
+                    line={'color':'#4CAF50'},
+                    color=alt.Gradient(
+                        gradient='linear',
+                        stops=[alt.GradientStop(color='#4CAF50', offset=0),
+                               alt.GradientStop(color='white', offset=1)],
+                        x1=1, x2=1, y1=1, y2=0
+                    )
+                ).encode(
+                    x='Date_dt:T',
+                    y='count()'
+                )
+                st.altair_chart(chart_evo, use_container_width=True)
+
+        with c_g2:
+            st.subheader("📊 Répartition par Jour")
+            if "Jour" in df_filt.columns and not df_filt.empty:
+                chart_j = alt.Chart(df_filt[df_filt["Statut"]=="Présent"]).mark_bar().encode(
                     x=alt.X('Jour', sort=["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]),
                     y='count()',
-                    color=alt.value("#4CAF50")
+                    color=alt.value("#2196F3")
                 )
                 st.altair_chart(chart_j, use_container_width=True)
         
-        with c_g2:
-            st.subheader("Top Cours (Présence)")
-            chart_c = alt.Chart(df_all[df_all["Statut"]=="Présent"]).mark_bar().encode(
-                y=alt.Y('Cours', sort='-x'),
-                x='count()',
-                color=alt.value("#2196F3")
-            )
-            st.altair_chart(chart_c, use_container_width=True)
+        st.subheader("🏆 Top Absents")
+        if not df_filt.empty:
+            df_abs = df_filt[df_filt["Statut"]=="Absent"]
+            top_abs = df_abs["Nom"].value_counts().head(10).reset_index()
+            top_abs.columns = ["Nom", "Nb Absences"]
+            st.dataframe(top_abs, use_container_width=True)
 
-    # --- 2. ANALYSE DETAILLEE ---
-    with tab_ana:
-        st.dataframe(df_all, use_container_width=True)
-
-    # --- 3. CONFIGURATION MESSAGES ---
+    # --- 2. CONFIGURATION MESSAGES ---
     with tab_conf:
         st.header("Personnalisation des messages Réception")
         
@@ -495,7 +562,7 @@ def show_manager():
                 st.session_state.tpl_man = new_man
                 st.success("OK")
 
-    # --- 4. MAINTENANCE ---
+    # --- 3. MAINTENANCE ---
     with tab_maint:
         st.header("Zone de Danger")
         st.warning("Attention, actions irréversibles.")
@@ -504,16 +571,9 @@ def show_manager():
         
         with col_imp:
             st.subheader("Importer CSV")
-            up_csv = st.file_uploader("Fichier CSV (cols: Nom, Date, Cours...)", type=["csv"])
+            up_csv = st.file_uploader("Fichier CSV", type=["csv"])
             if up_csv and st.button("Lancer Import"):
-                try:
-                    df_csv = pd.read_csv(up_csv)
-                    # Logique simplifiée d'import (à adapter selon format CSV)
-                    st.info(f"{len(df_csv)} lignes détectées.")
-                    # Simulation import
-                    st.success("Import terminé (Simulation)")
-                except Exception as e:
-                    st.error(f"Erreur : {e}")
+                st.info("Fonctionnalité désactivée pour sécurité dans cette version.")
 
         with col_rst:
             st.subheader("Reset Total")
