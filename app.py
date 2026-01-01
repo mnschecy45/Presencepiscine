@@ -18,7 +18,7 @@ BASE_ID = "app390ytx6oa2rbge"
 TABLE_NAME = "Presences"
 MANAGER_PASSWORD = st.secrets.get("MANAGER_PASSWORD", "manager")
 
-# --- STYLE CSS (Couleurs Vives + Footer) ---
+# --- STYLE CSS ---
 st.markdown("""
     <style>
     /* PRÉSENT : Vert Foncé / Texte Blanc */
@@ -91,7 +91,7 @@ st.markdown("""
 # =======================
 # 2. CHARGEMENT DONNÉES
 # =======================
-@st.cache_data(ttl=10) # Cache court pour voir les modifs vite
+@st.cache_data(ttl=5)
 def load_airtable_data():
     try:
         api = Api(API_TOKEN)
@@ -119,9 +119,15 @@ df_all, airtable_table = load_airtable_data()
 
 def delete_previous_session_records(date_val, heure_val, cours_val):
     if df_all.empty or airtable_table is None: return
-    date_str = date_val.strftime("%Y-%m-%d") if isinstance(date_val, (date, datetime)) else str(date_val)
-    mask = (df_all["Date"] == date_str) & (df_all["Heure"] == heure_val) & (df_all["Cours"] == cours_val)
-    to_delete = df_all[mask]
+    d_str = date_val.strftime("%Y-%m-%d") if isinstance(date_val, (date, datetime)) else str(date_val)
+    
+    # Filtre safe
+    df_temp = df_all.copy()
+    df_temp['Date_Str'] = df_temp['Date'].apply(lambda x: x if isinstance(x, str) else str(x))
+    
+    mask = (df_temp["Date"] == d_str) & (df_temp["Heure"] == heure_val) & (df_temp["Cours"] == cours_val)
+    to_delete = df_temp[mask]
+    
     if not to_delete.empty:
         ids = to_delete['id'].tolist()
         for i in range(0, len(ids), 10):
@@ -134,34 +140,31 @@ def save_data_to_cloud(df_new):
     first_row = df_new.iloc[0]
     d_val = first_row["Date"]; h_val = first_row["Heure"]; c_val = first_row["Cours"]
     
-    # 1. Nettoyage
     with st.spinner("Mise à jour de l'appel..."):
         delete_previous_session_records(d_val, h_val, c_val)
     
-    # 2. Sauvegarde
     prog = st.progress(0); total = len(df_new)
     for i, row in df_new.iterrows():
         try:
             statut = "Absent" if row["Absent"] else "Présent"
             d_str = row["Date"].strftime("%Y-%m-%d") if isinstance(row["Date"], (date, datetime)) else str(row["Date"])
+            # On stocke aussi si c'est Manuel ou pas (Important pour la Réception)
+            is_manuel = True if row.get("Manuel") else False
+            
             rec = {
                 "Nom": str(row["Nom"]), "Statut": statut, "Date": d_str,
-                "Cours": str(row["Cours"]), "Heure": str(row["Heure"]), "Traite": False
+                "Cours": str(row["Cours"]), "Heure": str(row["Heure"]), 
+                "Traite": False,
+                "Manuel": is_manuel 
             }
             airtable_table.create(rec)
             prog.progress((i + 1) / total)
         except: pass
     prog.empty()
     
-    # 3. MEMORISATION IMMEDIATE DU COURS ACTUEL
-    st.session_state['latest_course_context'] = {
-        'Date': d_val,
-        'Heure': h_val,
-        'Cours': c_val
-    }
-    
+    st.session_state['latest_course_context'] = {'Date': d_val, 'Heure': h_val, 'Cours': c_val}
     st.toast("C'est enregistré !", icon="💾")
-    load_airtable_data.clear() # Force le rechargement de la base au prochain passage
+    load_airtable_data.clear()
 
 def parse_pdf_complete(file_bytes):
     rows = []
@@ -173,23 +176,17 @@ def parse_pdf_complete(file_bytes):
                 if not txt: continue
                 lines = txt.splitlines()
                 d_str = ""; c_name = "Cours Inconnu"; h_deb = "00h00"
-                
                 for l in lines[:15]:
                     m = re.search(r"\d{2}/\d{2}/\d{4}", l)
                     if m: d_str = m.group(0); break
                 s_date = datetime.strptime(d_str, "%d/%m/%Y").date() if d_str else date.today()
-                
                 for l in lines[:15]:
                     ts = re.findall(r"\d{1,2}h\d{2}", l)
                     if ts:
-                        h_deb = ts[0]
-                        c_name = l[:l.index(ts[0])].strip()
-                        break
-                
+                        h_deb = ts[0]; c_name = l[:l.index(ts[0])].strip(); break
                 start = 0
                 for i, l in enumerate(lines):
                     if "N° réservation" in l: start = i + 1; break
-                
                 for l in lines[start:]:
                     if not l.strip() or any(x in l for x in ign): continue
                     lc = re.sub(r'\d+', '', l).strip()
@@ -209,9 +206,8 @@ def parse_pdf_complete(file_bytes):
 def show_maitre_nageur():
     st.title("👨‍🏫 Appel Bassin")
 
-    # Si appel terminé
     if st.session_state.get("appel_termine", False):
-        st.success("✅ Appel mis à jour avec succès !")
+        st.success("✅ Appel mis à jour !")
         if st.button("Retour à l'accueil"):
             st.session_state.appel_termine = False
             for k in ['df_appel', 'current_file']:
@@ -221,57 +217,38 @@ def show_maitre_nageur():
             st.rerun()
         return
 
-    # --- PARTIE 1 : BOUTON UNIQUE "DERNIER APPEL" ---
-    # Logique : Soit on a un appel qu'on vient de faire (session), soit on prend le dernier en date (DB)
-    
+    # --- DERNIER APPEL ---
     target_course = None
-    
-    # Cas A : On vient juste de sauvegarder un cours (Priorité absolue)
     if 'latest_course_context' in st.session_state:
         target_course = st.session_state['latest_course_context']
-    
-    # Cas B : Sinon, on cherche le dernier dans la base Airtable
     elif not df_all.empty and "Date_dt" in df_all.columns:
         df_sorted = df_all.sort_values(["Date_dt", "Heure"], ascending=[False, False])
         df_last = df_sorted.drop_duplicates(subset=['Date', 'Heure', 'Cours']).head(1)
         if not df_last.empty:
             last_row = df_last.iloc[0]
-            target_course = {
-                'Date': last_row['Date'],
-                'Heure': last_row['Heure'],
-                'Cours': last_row['Cours']
-            }
+            target_course = {'Date': last_row['Date'], 'Heure': last_row['Heure'], 'Cours': last_row['Cours']}
 
     if 'df_appel' not in st.session_state and target_course:
-        # Affichage du bouton
         d_aff = target_course['Date']
-        if isinstance(d_aff, (date, datetime)): d_aff = d_aff.strftime("%d/%m/%Y") # ou le format brut de Airtable
-        else: d_aff = str(d_aff) # Securité
+        if isinstance(d_aff, (date, datetime)): d_aff = d_aff.strftime("%d/%m/%Y")
+        else: d_aff = str(d_aff)
 
         btn_label = f"🔄 REPRENDRE : {target_course['Cours']} ({d_aff} à {target_course['Heure']})"
         
         if st.button(btn_label, type="primary", use_container_width=True):
-            # RECHARGEMENT
-            # Attention : il faut s'assurer que df_all est à jour si on vient de save
-            # On force un petit reload si besoin, mais normalement load_airtable_data le gère
-            
-            # Re-filtrage sur df_all (même s'il est pas 100% frais, on espère que cache clear a marché)
-            # Pour la date, on compare en string pour éviter les soucis de type
             d_target_str = target_course['Date']
             if isinstance(d_target_str, (date, datetime)): d_target_str = d_target_str.strftime("%Y-%m-%d")
-            
-            # On filtre df_all en convertissant la colonne Date en string pour comparer
-            df_all['Date_Str'] = df_all['Date'].apply(lambda x: x.strftime("%Y-%m-%d") if isinstance(x, (date, datetime)) else str(x))
-            
-            mask = (df_all["Date_Str"] == d_target_str) & \
-                   (df_all["Heure"] == target_course['Heure']) & \
-                   (df_all["Cours"] == target_course['Cours'])
-            
+            else: d_target_str = str(d_target_str)
+
+            df_temp = df_all.copy()
+            df_temp['Date_Str'] = df_temp['Date'].apply(lambda x: x.strftime("%Y-%m-%d") if isinstance(x, (date, datetime)) else str(x))
+            mask = (df_temp["Date_Str"] == d_target_str) & \
+                   (df_temp["Heure"] == target_course['Heure']) & \
+                   (df_temp["Cours"] == target_course['Cours'])
             session_data = df_all[mask].copy()
             
             if session_data.empty:
-                st.warning("Données en cours d'écriture... Réessayez dans 5 secondes.")
-                load_airtable_data.clear()
+                st.warning("Données introuvables.")
             else:
                 reconstructed = []
                 for _, r in session_data.iterrows():
@@ -279,15 +256,13 @@ def show_maitre_nageur():
                         "Date": r['Date'], "Cours": r['Cours'], "Heure": r['Heure'],
                         "Nom": str(r['Nom']), "Prenom": "", 
                         "Absent": (r['Statut'] == "Absent"),
-                        "Manuel": False
+                        "Manuel": True if r.get("Manuel") else False
                     })
                 
                 st.session_state.df_appel = pd.DataFrame(reconstructed)
-                st.session_state["mode_retard"] = True # Active mode retardataire
-                
+                st.session_state["mode_retard"] = True 
                 for idx, row in st.session_state.df_appel.iterrows():
                     st.session_state[f"cb_{idx}"] = not row["Absent"]
-                    
                 st.rerun()
 
     if 'df_appel' not in st.session_state:
@@ -298,20 +273,18 @@ def show_maitre_nageur():
             st.session_state.current_file = up.name
             st.session_state.df_appel = parse_pdf_complete(up.read())
             st.session_state["mode_retard"] = False
-            # Si on charge un nouveau, on oublie le contexte précédent
             if 'latest_course_context' in st.session_state: del st.session_state['latest_course_context']
             for k in list(st.session_state.keys()):
                  if k.startswith("cb_"): del st.session_state[k]
             st.rerun()
 
-    # --- PARTIE 2 : LISTE D'APPEL ---
+    # --- LISTE ---
     if 'df_appel' in st.session_state:
         df = st.session_state.df_appel
         if not df.empty:
             row1 = df.iloc[0]
             d_show = row1['Date']
             if isinstance(d_show, (date, datetime)): d_show = d_show.strftime('%d/%m/%Y')
-            
             st.markdown(f"## 📅 {d_show} | {row1['Cours']} ({row1['Heure']})")
             
             c1, c2 = st.columns(2)
@@ -329,24 +302,18 @@ def show_maitre_nageur():
             for idx, row in df.iterrows():
                 k = f"cb_{idx}"
                 if k not in st.session_state: st.session_state[k] = not row["Absent"]
-                
-                if mode_retard and st.session_state[k]:
-                    continue
+                if mode_retard and st.session_state[k]: continue
                 
                 c_chk, c_nom = st.columns([1, 4])
-                with c_chk:
-                    st.checkbox("P", key=k, label_visibility="collapsed")
+                with c_chk: st.checkbox("P", key=k, label_visibility="collapsed")
                 with c_nom:
                     full_n = f"{row['Nom']} {row['Prenom']}".strip()
-                    if st.session_state[k]:
-                        st.markdown(f'<div class="student-box-present">{full_n}</div>', unsafe_allow_html=True)
-                    else:
-                        st.markdown(f'<div class="student-box-absent">{full_n}</div>', unsafe_allow_html=True)
-                
+                    if st.session_state[k]: st.markdown(f'<div class="student-box-present">{full_n}</div>', unsafe_allow_html=True)
+                    else: st.markdown(f'<div class="student-box-absent">{full_n}</div>', unsafe_allow_html=True)
                 df.at[idx, "Absent"] = not st.session_state[k]
 
             st.write("---")
-            with st.expander("➕ Ajout Manuel"):
+            with st.expander("➕ Ajout Manuel (Non-Inscrit)"):
                 with st.form("add"):
                     nm = st.text_input("Nom").upper()
                     if st.form_submit_button("Ajouter"):
@@ -357,16 +324,13 @@ def show_maitre_nageur():
                         st.session_state[f"cb_{new_idx}"] = True
                         st.rerun()
 
-            # Footer
             nb_p = len(df[df["Absent"]==False]); nb_a = len(df[df["Absent"]==True]); nb_t = len(df)
             st.markdown(f"""
-            <div class="fixed-footer">
-                <div class="footer-content">
-                    <div class="footer-stat"><div class="footer-stat-val">{nb_t}</div><div class="footer-stat-label">TOTAL</div></div>
-                    <div class="footer-stat" style="color:#4CAF50;"><div class="footer-stat-val">{nb_p}</div><div class="footer-stat-label">PRÉSENTS</div></div>
-                    <div class="footer-stat" style="color:#f44336;"><div class="footer-stat-val">{nb_a}</div><div class="footer-stat-label">ABSENTS</div></div>
-                </div>
-            </div>
+            <div class="fixed-footer"><div class="footer-content">
+                <div class="footer-stat"><div class="footer-stat-val">{nb_t}</div><div class="footer-stat-label">TOTAL</div></div>
+                <div class="footer-stat" style="color:#4CAF50;"><div class="footer-stat-val">{nb_p}</div><div class="footer-stat-label">PRÉSENTS</div></div>
+                <div class="footer-stat" style="color:#f44336;"><div class="footer-stat-val">{nb_a}</div><div class="footer-stat-label">ABSENTS</div></div>
+            </div></div>
             """, unsafe_allow_html=True)
 
             if st.button("💾 SAUVEGARDER L'APPEL", type="primary", use_container_width=True):
@@ -375,50 +339,117 @@ def show_maitre_nageur():
                 st.rerun()
 
 # =======================
-# 5. AUTRES PAGES
+# 5. AUTRES PAGES (REC / MANAGER)
 # =======================
 def show_reception():
     st.title("💁 Réception")
     if df_all.empty: st.info("Aucune donnée."); return
+    
+    # 1. TEMPLATES MESSAGES (Défauts si pas configurés)
+    if "tpl_abs" not in st.session_state:
+        st.session_state.tpl_abs = "Bonjour {nom},\n\nSauf erreur de notre part, nous avons relevé les absences suivantes :\n{details}\nMerci de nous confirmer votre situation.\n\nCordialement."
+    if "tpl_man" not in st.session_state:
+        st.session_state.tpl_man = "Bonjour {nom},\n\nVous avez participé au cours de {cours} le {date} sans inscription préalable.\n\nMerci de bien vouloir régulariser votre passage à l'accueil ou de penser à réserver via l'application la prochaine fois.\n\nCordialement."
+
     t1, t2 = st.tabs(["⚡ ABSENCES", "⚠️ NON INSCRITS"])
+    
+    # --- ONGLET 1 : ABSENCES ---
     with t1:
         todo = df_all[(df_all["Statut"]=="Absent") & (df_all["Traite"]!=True)]
         if todo.empty: st.success("Tout est traité.")
         else:
             cli = st.selectbox("Sélectionner un absent", todo["Nom"].unique())
             if cli:
-                sub = todo[todo["Nom"]==cli]
-                st.write(f"{len(sub)} absences.")
+                sub = todo[todo["Nom"]==cli].sort_values("Date_dt", ascending=False)
+                
+                details_msg = ""
+                for _, r in sub.iterrows():
+                    d_fmt = r["Date_dt"].strftime("%d/%m") if pd.notnull(r["Date_dt"]) else str(r["Date"])
+                    details_msg += f"- {r['Cours']} le {d_fmt}\n"
+                
+                final_msg = st.session_state.tpl_abs.replace("{nom}", cli).replace("{details}", details_msg)
+                
+                st.info(f"📅 {len(sub)} absences.")
+                st.text_area("📧 Message à copier :", value=final_msg, height=200)
+                
                 if st.button("✅ Marquer Traité", key="t_abs"):
                     for pid in sub['id']: airtable_table.update(pid, {"Traite": True})
-                    load_airtable_data.clear()
-                    st.rerun()
+                    st.success("Fait !"); time.sleep(1); load_airtable_data.clear(); st.rerun()
+
+    # --- ONGLET 2 : NON INSCRITS (MANUELS) ---
     with t2:
-        mans = df_all[ (df_all["Nom"].astype(str).str.contains("MANUEL") | (df_all.get("Prenom")=="(Manuel)")) & (df_all["Traite"]!=True) ]
-        if mans.empty: st.info("RAS")
+        # On cherche les gens marqués "Manuel" (ajoutés à la main) et pas encore traités
+        # Note: Si la colonne 'Manuel' n'existe pas encore dans Airtable, ça peut bugger, donc on check
+        if "Manuel" in df_all.columns:
+            mans = df_all[ (df_all["Manuel"] == True) & (df_all["Traite"]!=True) ]
         else:
-            cli_m = st.selectbox("Non Inscrit", mans["Nom"].unique())
-            if st.button("✅ Régularisé", key="t_man"):
-                sub_m = mans[mans["Nom"]==cli_m]
-                for pid in sub_m['id']: airtable_table.update(pid, {"Traite": True})
-                load_airtable_data.clear()
-                st.rerun()
+            # Fallback : on cherche "(Manuel)" dans le prénom comme avant
+            mans = df_all[ (df_all["Prenom"] == "(Manuel)") & (df_all["Traite"]!=True) ]
+
+        if mans.empty: st.info("RAS - Aucun passage non-inscrit à traiter.")
+        else:
+            cli_m = st.selectbox("Sélectionner un Non-Inscrit", mans["Nom"].unique())
+            if cli_m:
+                sub_m = mans[mans["Nom"]==cli_m].sort_values("Date_dt", ascending=False)
+                last_pass = sub_m.iloc[0]
+                
+                d_fmt = last_pass["Date_dt"].strftime("%d/%m") if pd.notnull(last_pass["Date_dt"]) else str(last_pass["Date"])
+                c_fmt = last_pass["Cours"]
+                
+                # Génération du message avec le template "Non Inscrit"
+                final_msg_man = st.session_state.tpl_man.replace("{nom}", cli_m).replace("{date}", d_fmt).replace("{cours}", c_fmt)
+                
+                st.warning(f"Passage sans inscription détecté.")
+                st.text_area("📧 Message de rappel à copier :", value=final_msg_man, height=200)
+
+                if st.button("✅ Régularisé / Traité", key="t_man"):
+                    for pid in sub_m['id']: airtable_table.update(pid, {"Traite": True})
+                    st.success("Traité !"); time.sleep(1); load_airtable_data.clear(); st.rerun()
 
 def show_manager():
     st.title("📊 Manager")
     if st.sidebar.text_input("Mot de passe", type="password") != MANAGER_PASSWORD: return
-    st.metric("Total Enregistrements", len(df_all))
-    st.dataframe(df_all, use_container_width=True)
-    if st.button("🔥 VIDER BASE"):
-        ids = [r['id'] for r in airtable_table.all()]
-        for i in range(0, len(ids), 10): airtable_table.batch_delete(ids[i:i+10])
-        load_airtable_data.clear()
-        st.rerun()
+    
+    tab_data, tab_conf = st.tabs(["📋 DONNÉES", "⚙️ CONFIG MESSAGES"])
+    
+    with tab_data:
+        st.metric("Total Enregistrements", len(df_all))
+        st.dataframe(df_all, use_container_width=True)
+        st.write("---")
+        if st.button("🔥 VIDER BASE"):
+            ids = [r['id'] for r in airtable_table.all()]
+            for i in range(0, len(ids), 10): airtable_table.batch_delete(ids[i:i+10])
+            load_airtable_data.clear(); st.rerun()
+            
+    with tab_conf:
+        st.header("Personnalisation des messages Réception")
+        
+        # Init states if empty
+        if "tpl_abs" not in st.session_state: st.session_state.tpl_abs = "Bonjour {nom},\n..."
+        if "tpl_man" not in st.session_state: st.session_state.tpl_man = "Bonjour {nom},\n..."
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.subheader("Message Absences")
+            st.info("Variables : {nom}, {details}")
+            new_abs = st.text_area("Modèle", value=st.session_state.tpl_abs, height=200, key="txt_abs")
+            if st.button("Sauvegarder Absences"):
+                st.session_state.tpl_abs = new_abs
+                st.success("OK")
+        
+        with col2:
+            st.subheader("Message Non-Inscrits")
+            st.info("Variables : {nom}, {cours}, {date}")
+            new_man = st.text_area("Modèle", value=st.session_state.tpl_man, height=200, key="txt_man")
+            if st.button("Sauvegarder Non-Inscrits"):
+                st.session_state.tpl_man = new_man
+                st.success("OK")
 
 # =======================
 # 6. ROUTER
 # =======================
 if 'page' not in st.session_state: st.session_state.page = "HUB"
+
 if st.session_state.page == "HUB":
     st.title("🏊‍♂️ Piscine Pro")
     c1, c2, c3 = st.columns(3)
