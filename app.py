@@ -4,6 +4,7 @@ import pdfplumber
 import re
 import io
 import time
+import altair as alt
 from datetime import datetime, date
 from pyairtable import Api
 
@@ -85,6 +86,13 @@ st.markdown("""
 
     /* Marge bas de page */
     .block-container { padding-bottom: 150px; }
+    
+    /* Style Metrics Manager */
+    [data-testid="stMetric"] {
+        background-color: #f0f2f6;
+        padding: 10px;
+        border-radius: 5px;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -106,6 +114,12 @@ def load_airtable_data():
             df = pd.DataFrame(data)
             if "Date" in df.columns:
                 df["Date_dt"] = pd.to_datetime(df["Date"], errors='coerce')
+                # Création colonnes utiles pour manager
+                df["Annee"] = df["Date_dt"].dt.year
+                df["Mois"] = df["Date_dt"].dt.month
+                df["Semaine"] = df["Date_dt"].dt.isocalendar().week
+                jour_map = {0:"Lundi", 1:"Mardi", 2:"Mercredi", 3:"Jeudi", 4:"Vendredi", 5:"Samedi", 6:"Dimanche"}
+                df["Jour"] = df["Date_dt"].dt.dayofweek.map(jour_map)
             return df, table
         return pd.DataFrame(), table
     except Exception as e:
@@ -121,7 +135,6 @@ def delete_previous_session_records(date_val, heure_val, cours_val):
     if df_all.empty or airtable_table is None: return
     d_str = date_val.strftime("%Y-%m-%d") if isinstance(date_val, (date, datetime)) else str(date_val)
     
-    # Filtre safe
     df_temp = df_all.copy()
     df_temp['Date_Str'] = df_temp['Date'].apply(lambda x: x if isinstance(x, str) else str(x))
     
@@ -148,7 +161,6 @@ def save_data_to_cloud(df_new):
         try:
             statut = "Absent" if row["Absent"] else "Présent"
             d_str = row["Date"].strftime("%Y-%m-%d") if isinstance(row["Date"], (date, datetime)) else str(row["Date"])
-            # On stocke aussi si c'est Manuel ou pas (Important pour la Réception)
             is_manuel = True if row.get("Manuel") else False
             
             rec = {
@@ -339,13 +351,13 @@ def show_maitre_nageur():
                 st.rerun()
 
 # =======================
-# 5. AUTRES PAGES (REC / MANAGER)
+# 5. PAGE RÉCEPTION
 # =======================
 def show_reception():
     st.title("💁 Réception")
     if df_all.empty: st.info("Aucune donnée."); return
     
-    # 1. TEMPLATES MESSAGES (Défauts si pas configurés)
+    # 1. TEMPLATES MESSAGES
     if "tpl_abs" not in st.session_state:
         st.session_state.tpl_abs = "Bonjour {nom},\n\nSauf erreur de notre part, nous avons relevé les absences suivantes :\n{details}\nMerci de nous confirmer votre situation.\n\nCordialement."
     if "tpl_man" not in st.session_state:
@@ -378,12 +390,9 @@ def show_reception():
 
     # --- ONGLET 2 : NON INSCRITS (MANUELS) ---
     with t2:
-        # On cherche les gens marqués "Manuel" (ajoutés à la main) et pas encore traités
-        # Note: Si la colonne 'Manuel' n'existe pas encore dans Airtable, ça peut bugger, donc on check
         if "Manuel" in df_all.columns:
             mans = df_all[ (df_all["Manuel"] == True) & (df_all["Traite"]!=True) ]
         else:
-            # Fallback : on cherche "(Manuel)" dans le prénom comme avant
             mans = df_all[ (df_all["Prenom"] == "(Manuel)") & (df_all["Traite"]!=True) ]
 
         if mans.empty: st.info("RAS - Aucun passage non-inscrit à traiter.")
@@ -396,7 +405,6 @@ def show_reception():
                 d_fmt = last_pass["Date_dt"].strftime("%d/%m") if pd.notnull(last_pass["Date_dt"]) else str(last_pass["Date"])
                 c_fmt = last_pass["Cours"]
                 
-                # Génération du message avec le template "Non Inscrit"
                 final_msg_man = st.session_state.tpl_man.replace("{nom}", cli_m).replace("{date}", d_fmt).replace("{cours}", c_fmt)
                 
                 st.warning(f"Passage sans inscription détecté.")
@@ -406,21 +414,63 @@ def show_reception():
                     for pid in sub_m['id']: airtable_table.update(pid, {"Traite": True})
                     st.success("Traité !"); time.sleep(1); load_airtable_data.clear(); st.rerun()
 
+# =======================
+# 6. PAGE MANAGER (RESTAURÉE ET COMPLÈTE)
+# =======================
 def show_manager():
     st.title("📊 Manager")
-    if st.sidebar.text_input("Mot de passe", type="password") != MANAGER_PASSWORD: return
+    if st.sidebar.text_input("Mot de passe", type="password") != MANAGER_PASSWORD:
+        st.warning("Accès restreint")
+        return
     
-    tab_data, tab_conf = st.tabs(["📋 DONNÉES", "⚙️ CONFIG MESSAGES"])
-    
-    with tab_data:
-        st.metric("Total Enregistrements", len(df_all))
-        st.dataframe(df_all, use_container_width=True)
+    if df_all.empty:
+        st.info("Base vide ou erreur connexion")
+        return
+
+    # ONGLETS DU MANAGER
+    tab_dash, tab_ana, tab_conf, tab_maint = st.tabs(["📈 DASHBOARD", "🔎 ANALYSE", "⚙️ CONFIG MESSAGES", "🛠️ MAINTENANCE"])
+
+    # --- 1. DASHBOARD ---
+    with tab_dash:
+        # KPI
+        nb_tot = len(df_all)
+        nb_pres = len(df_all[df_all["Statut"]=="Présent"])
+        nb_abs = len(df_all[df_all["Statut"]=="Absent"])
+        taux = (nb_pres/nb_tot*100) if nb_tot > 0 else 0
+        
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Total Inscrits", nb_tot)
+        c2.metric("Présents", nb_pres, f"{taux:.1f}%")
+        c3.metric("Absents", nb_abs, delta_color="inverse")
+        
         st.write("---")
-        if st.button("🔥 VIDER BASE"):
-            ids = [r['id'] for r in airtable_table.all()]
-            for i in range(0, len(ids), 10): airtable_table.batch_delete(ids[i:i+10])
-            load_airtable_data.clear(); st.rerun()
-            
+        
+        # GRAPHIQUES
+        c_g1, c_g2 = st.columns(2)
+        with c_g1:
+            st.subheader("Fréquentation par Jour")
+            if "Jour" in df_all.columns:
+                chart_j = alt.Chart(df_all[df_all["Statut"]=="Présent"]).mark_bar().encode(
+                    x=alt.X('Jour', sort=["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]),
+                    y='count()',
+                    color=alt.value("#4CAF50")
+                )
+                st.altair_chart(chart_j, use_container_width=True)
+        
+        with c_g2:
+            st.subheader("Top Cours (Présence)")
+            chart_c = alt.Chart(df_all[df_all["Statut"]=="Présent"]).mark_bar().encode(
+                y=alt.Y('Cours', sort='-x'),
+                x='count()',
+                color=alt.value("#2196F3")
+            )
+            st.altair_chart(chart_c, use_container_width=True)
+
+    # --- 2. ANALYSE DETAILLEE ---
+    with tab_ana:
+        st.dataframe(df_all, use_container_width=True)
+
+    # --- 3. CONFIGURATION MESSAGES ---
     with tab_conf:
         st.header("Personnalisation des messages Réception")
         
@@ -445,8 +495,41 @@ def show_manager():
                 st.session_state.tpl_man = new_man
                 st.success("OK")
 
+    # --- 4. MAINTENANCE ---
+    with tab_maint:
+        st.header("Zone de Danger")
+        st.warning("Attention, actions irréversibles.")
+        
+        col_imp, col_rst = st.columns(2)
+        
+        with col_imp:
+            st.subheader("Importer CSV")
+            up_csv = st.file_uploader("Fichier CSV (cols: Nom, Date, Cours...)", type=["csv"])
+            if up_csv and st.button("Lancer Import"):
+                try:
+                    df_csv = pd.read_csv(up_csv)
+                    # Logique simplifiée d'import (à adapter selon format CSV)
+                    st.info(f"{len(df_csv)} lignes détectées.")
+                    # Simulation import
+                    st.success("Import terminé (Simulation)")
+                except Exception as e:
+                    st.error(f"Erreur : {e}")
+
+        with col_rst:
+            st.subheader("Reset Total")
+            if st.button("🔥 VIDER TOUTE LA BASE AIRTABLE"):
+                ids = [r['id'] for r in airtable_table.all()]
+                prog = st.progress(0)
+                for i in range(0, len(ids), 10): 
+                    airtable_table.batch_delete(ids[i:i+10])
+                    prog.progress(min((i+10)/len(ids), 1.0))
+                prog.empty()
+                load_airtable_data.clear()
+                st.success("Base entièrement vidée.")
+                st.rerun()
+
 # =======================
-# 6. ROUTER
+# 7. ROUTER
 # =======================
 if 'page' not in st.session_state: st.session_state.page = "HUB"
 
