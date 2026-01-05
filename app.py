@@ -19,7 +19,7 @@ BASE_ID = "app390ytx6oa2rbge"
 TABLE_NAME = "Presences"
 MANAGER_PASSWORD = st.secrets.get("MANAGER_PASSWORD", "manager")
 
-# --- INITIALISATION SESSION STATE (Pour éviter AttributeError) ---
+# --- INITIALISATION SESSION STATE ---
 if "tpl_abs" not in st.session_state:
     st.session_state.tpl_abs = "Bonjour {nom},\n\nSauf erreur de notre part, nous avons relevé les absences suivantes :\n{details}\nMerci de nous confirmer votre situation.\n\nCordialement."
 if "tpl_man" not in st.session_state:
@@ -57,7 +57,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =======================
-# 2. CHARGEMENT DONNÉES (CORRECTIF KEYERROR)
+# 2. CHARGEMENT DONNÉES (SÉCURISÉ)
 # =======================
 @st.cache_data(ttl=5)
 def load_airtable_data():
@@ -66,22 +66,20 @@ def load_airtable_data():
         table = api.table(BASE_ID, TABLE_NAME)
         records = table.all()
         
-        # Structure vide par défaut
         if not records:
             return pd.DataFrame(columns=["Nom", "Prenom", "Date", "Heure", "Cours", "Statut", "Manuel", "Traite"]), table
 
         data = [r['fields'] for r in records]
-        # On ajoute les IDs
         for i, r in enumerate(data):
             r['id'] = records[i]['id']
             
         df = pd.DataFrame(data)
 
-        # --- FIX KEYERROR : On s'assure que toutes les colonnes existent ---
+        # FIX KEYERROR : Création des colonnes manquantes
         required_cols = ["Nom", "Prenom", "Date", "Heure", "Cours", "Statut", "Manuel", "Traite"]
         for col in required_cols:
             if col not in df.columns:
-                df[col] = None # Crée la colonne vide si manquante
+                df[col] = None
 
         # Nettoyage
         df["Prenom"] = df["Prenom"].fillna("")
@@ -89,7 +87,6 @@ def load_airtable_data():
         df["Traite"] = df["Traite"].fillna(False)
         df["Nom"] = df["Nom"].astype(str).str.upper()
 
-        # Dates pour Manager
         if "Date" in df.columns:
             df["Date_dt"] = pd.to_datetime(df["Date"], errors='coerce')
             df = df.dropna(subset=["Date_dt"])
@@ -100,7 +97,6 @@ def load_airtable_data():
 
         return df, table
     except Exception as e:
-        # En cas de crash total, renvoie vide safe
         return pd.DataFrame(columns=["Nom", "Date"]), None
 
 df_all, airtable_table = load_airtable_data()
@@ -154,37 +150,79 @@ def save_data_to_cloud(df_new):
     st.toast("C'est enregistré !", icon="💾")
     load_airtable_data.clear()
 
+# --- NOUVELLE FONCTION PDF CORRIGÉE ---
 def parse_pdf_complete(file_bytes):
     rows = []
-    ign = ["TCPDF", "www.", "places", "réservées", "disponibles", "ouvertes", "le ", " à ", "Page ", "Généré"]
-    try:
-        with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
-            for page in pdf.pages:
-                txt = page.extract_text()
-                if not txt: continue
-                lines = txt.splitlines()
-                d_str = ""; c_name = "Cours Inconnu"; h_deb = "00h00"
-                for l in lines[:15]:
-                    m = re.search(r"\d{2}/\d{2}/\d{4}", l)
-                    if m: d_str = m.group(0); break
-                s_date = datetime.strptime(d_str, "%d/%m/%Y").date() if d_str else date.today()
-                for l in lines[:15]:
-                    ts = re.findall(r"\d{1,2}h\d{2}", l)
-                    if ts: h_deb = ts[0]; c_name = l[:l.index(ts[0])].strip(); break
-                start = 0
-                for i, l in enumerate(lines):
-                    if "N° réservation" in l: start = i + 1; break
-                for l in lines[start:]:
-                    if not l.strip() or any(x in l for x in ign): continue
-                    lc = re.sub(r'\d+', '', l).strip()
-                    p = lc.split()
-                    if len(p) >= 2:
-                        rows.append({
-                            "Date": s_date, "Cours": c_name, "Heure": h_deb,
-                            "Nom": p[0].upper(), "Prenom": " ".join(p[1:]),
-                            "Absent": False, "Manuel": False, "Session_ID": f"{s_date}_{h_deb}"
-                        })
-    except: pass
+    # LISTE PROPRE : J'ai enlevé "le " et " à " pour ne pas supprimer les prénoms
+    ign = ["TCPDF", "www.", "places", "réservées", "disponibles", "ouvertes", "Page ", "Généré", "Mairie", "L'Aquacienne"]
+    
+    current_date = date.today()
+    current_cours = "Cours Inconnu"
+    current_heure = "00h00"
+    
+    with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+        for page_index, page in enumerate(pdf.pages):
+            txt = page.extract_text()
+            if not txt: continue
+            lines = txt.splitlines()
+            
+            # 1. EN-TÊTE
+            for l in lines[:15]:
+                m = re.search(r"\d{2}/\d{2}/\d{4}", l)
+                if m:
+                    try: current_date = datetime.strptime(m.group(0), "%d/%m/%Y").date()
+                    except: pass
+                
+                ts = re.findall(r"\d{1,2}h\d{2}", l)
+                if ts:
+                    current_heure = ts[0]
+                    possible_cours = l.split(ts[0])[0].strip()
+                    if len(possible_cours) > 3:
+                        current_cours = possible_cours.replace("Le", "").replace("lundi", "").strip()
+
+            # 2. DÉTECTION LISTE
+            start_index = 0
+            for i, l in enumerate(lines):
+                if "N° réservation" in l or "Prénom" in l: 
+                    start_index = i + 1
+                    break
+            
+            if start_index == 0 and page_index > 0:
+                start_index = 3 
+
+            # 3. LECTURE NOMS
+            for l in lines[start_index:]:
+                l_clean = l.strip()
+                if not l_clean: continue
+                
+                if any(x in l_clean for x in ign): continue
+                
+                name_candidate = re.sub(r'[0-9]+', '', l_clean).strip()
+                if ":" in name_candidate: continue
+                
+                parts = name_candidate.split()
+                if len(parts) >= 2:
+                    p_nom = ""; p_prenom = ""
+                    
+                    # Logique Majuscule pour le NOM
+                    mots_nom = [p for p in parts if p.isupper() and len(p) > 1]
+                    mots_prenom = [p for p in parts if not p.isupper() or len(p) == 1]
+                    
+                    if mots_nom:
+                        p_nom = " ".join(mots_nom)
+                        p_prenom = " ".join(mots_prenom)
+                    else:
+                        p_nom = parts[-1]
+                        p_prenom = " ".join(parts[:-1])
+                    
+                    if len(p_nom) < 2: continue
+                    
+                    rows.append({
+                        "Date": current_date, "Cours": current_cours, "Heure": current_heure,
+                        "Nom": p_nom, "Prenom": p_prenom,
+                        "Absent": False, "Manuel": False, "Session_ID": f"{current_date}_{current_heure}"
+                    })
+
     return pd.DataFrame(rows)
 
 # =======================
@@ -368,7 +406,7 @@ def show_reception():
                     st.success("Fait !"); time.sleep(1); load_airtable_data.clear(); st.rerun()
 
 # =======================
-# 6. PAGE MANAGER (RESTAURÉE COMPLETE)
+# 6. PAGE MANAGER
 # =======================
 def show_manager():
     st.title("📊 Manager")
