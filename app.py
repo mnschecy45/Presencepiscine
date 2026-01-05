@@ -19,22 +19,24 @@ BASE_ID = "app390ytx6oa2rbge"
 TABLE_NAME = "Presences"
 MANAGER_PASSWORD = st.secrets.get("MANAGER_PASSWORD", "manager")
 
+# --- INITIALISATION SESSION STATE (Pour éviter AttributeError) ---
+if "tpl_abs" not in st.session_state:
+    st.session_state.tpl_abs = "Bonjour {nom},\n\nSauf erreur de notre part, nous avons relevé les absences suivantes :\n{details}\nMerci de nous confirmer votre situation.\n\nCordialement."
+if "tpl_man" not in st.session_state:
+    st.session_state.tpl_man = "Bonjour {nom},\n\nVous avez participé au cours de {cours} le {date} sans inscription préalable.\n\nMerci de régulariser votre passage à l'accueil.\n\nCordialement."
+
 # --- STYLE CSS ---
 st.markdown("""
     <style>
     /* PRÉSENT */
     .student-box-present {
-        background-color: #1b5e20;
-        color: white;
-        padding: 15px; border-radius: 8px; font-weight: bold; font-size: 16px;
-        margin-bottom: 5px; text-align: center; border: 1px solid #144a17;
+        background-color: #1b5e20; color: white; padding: 15px; border-radius: 8px;
+        font-weight: bold; font-size: 16px; margin-bottom: 5px; text-align: center; border: 1px solid #144a17;
     }
     /* ABSENT */
     .student-box-absent {
-        background-color: #b71c1c; 
-        color: white;
-        padding: 15px; border-radius: 8px; font-weight: bold; font-size: 16px;
-        margin-bottom: 5px; text-align: center; border: 1px solid #7f0000;
+        background-color: #b71c1c; color: white; padding: 15px; border-radius: 8px;
+        font-weight: bold; font-size: 16px; margin-bottom: 5px; text-align: center; border: 1px solid #7f0000;
     }
     /* Checkbox */
     .stCheckbox { display: flex; align-items: center; justify-content: center; height: 100%; padding-top: 10px; }
@@ -49,13 +51,13 @@ st.markdown("""
     .footer-stat-val { font-size: 1.2rem; font-weight: bold; }
     .footer-stat-label { font-size: 0.7rem; opacity: 0.8; text-transform: uppercase; }
     .block-container { padding-bottom: 150px; }
-    /* Metrics Manager */
+    /* Metrics */
     [data-testid="stMetric"] { background-color: #f0f2f6; padding: 10px; border-radius: 5px; border: 1px solid #ddd; }
     </style>
 """, unsafe_allow_html=True)
 
 # =======================
-# 2. CHARGEMENT DONNÉES (BLINDÉ)
+# 2. CHARGEMENT DONNÉES (CORRECTIF KEYERROR)
 # =======================
 @st.cache_data(ttl=5)
 def load_airtable_data():
@@ -64,58 +66,53 @@ def load_airtable_data():
         table = api.table(BASE_ID, TABLE_NAME)
         records = table.all()
         
-        # 1. Création DataFrame de base
+        # Structure vide par défaut
         if not records:
-            # On retourne un DF vide mais avec les bonnes colonnes pour éviter KeyError
-            return pd.DataFrame(columns=["Nom", "Prenom", "Date", "Heure", "Cours", "Statut", "Manuel", "Traite", "Annee", "Mois", "Jour"]), table
+            return pd.DataFrame(columns=["Nom", "Prenom", "Date", "Heure", "Cours", "Statut", "Manuel", "Traite"]), table
 
         data = [r['fields'] for r in records]
+        # On ajoute les IDs
         for i, r in enumerate(data):
-            r['id'] = records[i]['id'] # On garde l'ID pour les updates
+            r['id'] = records[i]['id']
             
         df = pd.DataFrame(data)
 
-        # 2. SÉCURISATION DES COLONNES (Le Fix du KeyError)
-        # On force la présence de toutes les colonnes, même si Airtable ne les renvoie pas
+        # --- FIX KEYERROR : On s'assure que toutes les colonnes existent ---
         required_cols = ["Nom", "Prenom", "Date", "Heure", "Cours", "Statut", "Manuel", "Traite"]
         for col in required_cols:
             if col not in df.columns:
-                df[col] = None # On crée la colonne vide
-        
-        # 3. Nettoyage des valeurs
+                df[col] = None # Crée la colonne vide si manquante
+
+        # Nettoyage
         df["Prenom"] = df["Prenom"].fillna("")
         df["Manuel"] = df["Manuel"].fillna(False)
         df["Traite"] = df["Traite"].fillna(False)
         df["Nom"] = df["Nom"].astype(str).str.upper()
 
-        # 4. Dates et Dérivés (Pour Manager)
+        # Dates pour Manager
         if "Date" in df.columns:
             df["Date_dt"] = pd.to_datetime(df["Date"], errors='coerce')
-            df = df.dropna(subset=["Date_dt"]) # On vire les lignes sans date valide
+            df = df.dropna(subset=["Date_dt"])
             df["Annee"] = df["Date_dt"].dt.year
             df["Mois"] = df["Date_dt"].dt.month
-            df["Semaine"] = df["Date_dt"].dt.isocalendar().week
             jour_map = {0:"Lundi", 1:"Mardi", 2:"Mercredi", 3:"Jeudi", 4:"Vendredi", 5:"Samedi", 6:"Dimanche"}
             df["Jour"] = df["Date_dt"].dt.dayofweek.map(jour_map)
-            # Colonne composite pour les filtres
-            df["Cours_Complet"] = df["Cours"] + " (" + df["Jour"] + " " + df["Heure"] + ")"
 
         return df, table
     except Exception as e:
-        # En cas d'erreur grave, on renvoie un vide safe
+        # En cas de crash total, renvoie vide safe
         return pd.DataFrame(columns=["Nom", "Date"]), None
 
 df_all, airtable_table = load_airtable_data()
 
 # =======================
-# 3. FONCTIONS UTILITAIRES
+# 3. FONCTIONS LOGIQUES
 # =======================
 
 def delete_previous_session_records(date_val, heure_val, cours_val):
     if df_all.empty or airtable_table is None: return
     d_str = date_val.strftime("%Y-%m-%d") if isinstance(date_val, (date, datetime)) else str(date_val)
     
-    # Filtre safe sur copie
     df_temp = df_all.copy()
     df_temp['Date_Str'] = df_temp['Date'].apply(lambda x: x if isinstance(x, str) else str(x))
     
@@ -207,6 +204,7 @@ def show_maitre_nageur():
             st.rerun()
         return
 
+    # Bouton REPRENDRE LE DERNIER
     target_course = None
     if 'latest_course_context' in st.session_state:
         target_course = st.session_state['latest_course_context']
@@ -260,6 +258,7 @@ def show_maitre_nageur():
                  if k.startswith("cb_"): del st.session_state[k]
             st.rerun()
 
+    # Liste d'appel
     if 'df_appel' in st.session_state:
         df = st.session_state.df_appel
         if not df.empty:
@@ -318,25 +317,19 @@ def show_maitre_nageur():
                 st.rerun()
 
 # =======================
-# 5. PAGE RÉCEPTION (CORRIGÉE KEYERROR)
+# 5. PAGE RÉCEPTION
 # =======================
 def show_reception():
     st.title("💁 Réception")
     if df_all.empty: st.info("Chargement..."); return
     
-    if "tpl_abs" not in st.session_state: st.session_state.tpl_abs = "Bonjour {nom},\n\nSauf erreur de notre part, nous avons relevé les absences suivantes :\n{details}\nMerci."
-    if "tpl_man" not in st.session_state: st.session_state.tpl_man = "Bonjour {nom},\n\nVous avez participé au cours de {cours} le {date} sans inscription."
-
     t1, t2 = st.tabs(["⚡ ABSENCES", "⚠️ NON INSCRITS"])
     
     with t1:
-        # Sécurisation : on utilise df.get ou on vérifie la colonne
         mask = (df_all["Statut"]=="Absent") & (df_all["Traite"]!=True)
-        if "Manuel" in df_all.columns:
-            mask = mask & (df_all["Manuel"] == False)
+        if "Manuel" in df_all.columns: mask = mask & (df_all["Manuel"] == False)
         
         todo = df_all[mask]
-        
         if todo.empty: st.success("Tout est traité.")
         else:
             cli = st.selectbox("Sélectionner un absent", todo["Nom"].unique())
@@ -355,13 +348,9 @@ def show_reception():
                     st.success("Fait !"); time.sleep(1); load_airtable_data.clear(); st.rerun()
 
     with t2:
-        # Recherche sécurisée des manuels
         mask_m = (df_all["Traite"]!=True)
-        if "Manuel" in df_all.columns:
-            mask_m = mask_m & (df_all["Manuel"] == True)
-        else:
-            mask_m = mask_m & (df_all["Prenom"] == "(Manuel)")
-            
+        if "Manuel" in df_all.columns: mask_m = mask_m & (df_all["Manuel"] == True)
+        else: mask_m = mask_m & (df_all["Prenom"] == "(Manuel)")
         mans = df_all[mask_m]
         
         if mans.empty: st.info("RAS")
@@ -371,7 +360,6 @@ def show_reception():
                 sub_m = mans[mans["Nom"]==cli_m].sort_values("Date_dt", ascending=False)
                 last = sub_m.iloc[0]
                 d_fmt = last["Date_dt"].strftime("%d/%m") if pd.notnull(last["Date_dt"]) else str(last["Date"])
-                
                 msg = st.session_state.tpl_man.replace("{nom}", cli_m).replace("{date}", d_fmt).replace("{cours}", str(last["Cours"]))
                 st.warning("Passage non inscrit.")
                 st.text_area("Message", value=msg, height=150)
@@ -391,73 +379,82 @@ def show_manager():
     # 1. DASHBOARD GLOBAL
     with tab1:
         st.subheader("Vue d'ensemble")
-        # Filtres
-        c1, c2 = st.columns(2)
-        yrs = sorted(df_all["Annee"].dropna().unique(), reverse=True)
-        sel_yr = c1.selectbox("Année", yrs) if len(yrs)>0 else None
-        
-        df_yr = df_all[df_all["Annee"]==sel_yr] if sel_yr else df_all
-        
-        mois_dispo = sorted(df_yr["Mois"].dropna().unique())
-        sel_mois = c2.selectbox("Mois", ["TOUS"] + list(mois_dispo))
-        
-        df_filt = df_yr[df_yr["Mois"]==sel_mois] if sel_mois != "TOUS" else df_yr
-        
-        # Stats
-        tot = len(df_filt)
-        pres = len(df_filt[df_filt["Statut"]=="Présent"])
-        absent = len(df_filt[df_filt["Statut"]=="Absent"])
-        taux = (pres/tot*100) if tot>0 else 0
-        
-        k1, k2, k3 = st.columns(3)
-        k1.metric("Inscrits", tot)
-        k2.metric("Présents", pres, f"{taux:.1f}%")
-        k3.metric("Absents", absent, delta_color="inverse")
-        
-        st.divider()
-        g1, g2 = st.columns(2)
-        with g1:
+        if df_all.empty:
+            st.info("Aucune donnée")
+        else:
+            # Filtres
+            c1, c2 = st.columns(2)
+            yrs = sorted(df_all["Annee"].dropna().unique(), reverse=True)
+            sel_yr = c1.selectbox("Année", yrs) if len(yrs)>0 else None
+            df_yr = df_all[df_all["Annee"]==sel_yr] if sel_yr else df_all
+            
+            mois_dispo = sorted(df_yr["Mois"].dropna().unique())
+            sel_mois = c2.selectbox("Mois", ["TOUS"] + list(mois_dispo))
+            df_filt = df_yr[df_yr["Mois"]==sel_mois] if sel_mois != "TOUS" else df_yr
+            
+            # Stats
+            tot = len(df_filt)
+            pres = len(df_filt[df_filt["Statut"]=="Présent"])
+            absent = len(df_filt[df_filt["Statut"]=="Absent"])
+            taux = (pres/tot*100) if tot>0 else 0
+            
+            k1, k2, k3 = st.columns(3)
+            k1.metric("Inscrits", tot)
+            k2.metric("Présents", pres, f"{taux:.1f}%")
+            k3.metric("Absents", absent, delta_color="inverse")
+            
+            st.divider()
+            g1, g2 = st.columns(2)
+            with g1:
+                st.write("**Fréquentation par Jour**")
+                if not df_filt.empty and "Jour" in df_filt.columns:
+                    ch = alt.Chart(df_filt[df_filt["Statut"]=="Présent"]).mark_bar().encode(
+                        x=alt.X('Jour', sort=["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]),
+                        y='count()',
+                        color=alt.value("#4CAF50")
+                    )
+                    st.altair_chart(ch, use_container_width=True)
+            with g2:
+                st.write("**Top Cours (Présence)**")
+                if not df_filt.empty:
+                    chart_c = alt.Chart(df_filt[df_filt["Statut"]=="Présent"]).mark_bar().encode(
+                        y=alt.Y('Cours', sort='-x'),
+                        x='count()',
+                        color=alt.value("#2196F3")
+                    )
+                    st.altair_chart(chart_c, use_container_width=True)
+            
             st.write("**Top Absents**")
             if not df_filt.empty:
                 top = df_filt[df_filt["Statut"]=="Absent"]["Nom"].value_counts().head(5)
                 st.dataframe(top, use_container_width=True)
-        with g2:
-            st.write("**Par Jour**")
-            if not df_filt.empty and "Jour" in df_filt.columns:
-                ch = alt.Chart(df_filt[df_filt["Statut"]=="Présent"]).mark_bar().encode(
-                    x=alt.X('Jour', sort=["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]),
-                    y='count()'
-                )
-                st.altair_chart(ch, use_container_width=True)
 
-    # 2. ANALYSE DETAILLEE (RETOUR)
+    # 2. ANALYSE DETAILLEE
     with tab2:
         st.subheader("Comparateur & Évolution")
-        
         mode = st.radio("Mode", ["Évolution d'un cours", "Comparaison Périodes"], horizontal=True)
         
         if mode == "Évolution d'un cours":
-            cours_list = sorted(df_all["Cours"].dropna().unique())
-            c_choix = st.selectbox("Choisir un cours", cours_list)
-            if c_choix:
-                data_c = df_all[(df_all["Cours"]==c_choix) & (df_all["Statut"]=="Présent")]
-                if not data_c.empty:
-                    chart_line = alt.Chart(data_c).mark_line(point=True).encode(
-                        x='Date_dt:T', y='count()', tooltip=['Date_dt', 'count()']
-                    ).properties(title=f"Présence : {c_choix}")
-                    st.altair_chart(chart_line, use_container_width=True)
-                else: st.warning("Pas de données.")
-                
-        else: # Comparaison
-            c_a, c_b = st.columns(2)
-            m_a = c_a.selectbox("Mois A", sorted(df_all["Mois"].unique()), key="ma")
-            m_b = c_b.selectbox("Mois B", sorted(df_all["Mois"].unique()), key="mb")
-            
-            d_a = df_all[df_all["Mois"]==m_a]
-            d_b = df_all[df_all["Mois"]==m_b]
-            
-            c_a.metric(f"Mois {m_a}", len(d_a))
-            c_b.metric(f"Mois {m_b}", len(d_b), delta=len(d_b)-len(d_a))
+            if not df_all.empty:
+                cours_list = sorted(df_all["Cours"].dropna().unique())
+                c_choix = st.selectbox("Choisir un cours", cours_list)
+                if c_choix:
+                    data_c = df_all[(df_all["Cours"]==c_choix) & (df_all["Statut"]=="Présent")]
+                    if not data_c.empty:
+                        chart_line = alt.Chart(data_c).mark_line(point=True).encode(
+                            x='Date_dt:T', y='count()', tooltip=['Date_dt', 'count()']
+                        ).properties(title=f"Présence : {c_choix}")
+                        st.altair_chart(chart_line, use_container_width=True)
+                    else: st.warning("Pas de données.")
+        else:
+            if not df_all.empty:
+                c_a, c_b = st.columns(2)
+                m_a = c_a.selectbox("Mois A", sorted(df_all["Mois"].unique()), key="ma")
+                m_b = c_b.selectbox("Mois B", sorted(df_all["Mois"].unique()), key="mb")
+                d_a = df_all[df_all["Mois"]==m_a]
+                d_b = df_all[df_all["Mois"]==m_b]
+                c_a.metric(f"Mois {m_a}", len(d_a))
+                c_b.metric(f"Mois {m_b}", len(d_b), delta=len(d_b)-len(d_a))
 
     # 3. CONFIG
     with tab3:
@@ -465,10 +462,12 @@ def show_manager():
         c1, c2 = st.columns(2)
         with c1:
             st.write("Modèle Absences ({nom}, {details})")
-            st.session_state.tpl_abs = st.text_area("Txt Abs", st.session_state.tpl_abs, height=150)
+            new_abs = st.text_area("Txt Abs", st.session_state.tpl_abs, height=150)
+            if st.button("Sauvegarder Abs"): st.session_state.tpl_abs = new_abs; st.success("OK")
         with c2:
             st.write("Modèle Non-Inscrits ({nom}, {cours}, {date})")
-            st.session_state.tpl_man = st.text_area("Txt Man", st.session_state.tpl_man, height=150)
+            new_man = st.text_area("Txt Man", st.session_state.tpl_man, height=150)
+            if st.button("Sauvegarder Man"): st.session_state.tpl_man = new_man; st.success("OK")
 
     # 4. MAINTENANCE
     with tab4:
