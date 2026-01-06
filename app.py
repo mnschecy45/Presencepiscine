@@ -150,7 +150,7 @@ def save_data_to_cloud(df_new):
     st.toast("C'est enregistré !", icon="💾")
     load_airtable_data.clear()
 
-# --- NOUVELLE FONCTION PDF CORRIGÉE ---
+# --- FONCTION PDF CORRIGÉE (25/25) ---
 def parse_pdf_complete(file_bytes):
     rows = []
     # LISTE PROPRE : J'ai enlevé "le " et " à " pour ne pas supprimer les prénoms
