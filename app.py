@@ -57,9 +57,9 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =======================
-# 2. CHARGEMENT DONNÉES (SÉCURISÉ)
+# 2. CHARGEMENT DONNÉES
 # =======================
-@st.cache_data(ttl=5)
+@st.cache_data(ttl=0) # Cache désactivé pour forcer la fraîcheur
 def load_airtable_data():
     try:
         api = Api(API_TOKEN)
@@ -75,13 +75,10 @@ def load_airtable_data():
             
         df = pd.DataFrame(data)
 
-        # FIX KEYERROR : Création des colonnes manquantes
         required_cols = ["Nom", "Prenom", "Date", "Heure", "Cours", "Statut", "Manuel", "Traite"]
         for col in required_cols:
-            if col not in df.columns:
-                df[col] = None
+            if col not in df.columns: df[col] = None
 
-        # Nettoyage
         df["Prenom"] = df["Prenom"].fillna("")
         df["Manuel"] = df["Manuel"].fillna(False)
         df["Traite"] = df["Traite"].fillna(False)
@@ -126,9 +123,11 @@ def save_data_to_cloud(df_new):
     first_row = df_new.iloc[0]
     d_val = first_row["Date"]; h_val = first_row["Heure"]; c_val = first_row["Cours"]
     
-    with st.spinner("Enregistrement..."):
+    with st.spinner("Sauvegarde en cours (ne quittez pas)..."):
+        # 1. Nettoyage
         delete_previous_session_records(d_val, h_val, c_val)
         
+        # 2. Ajout
         prog = st.progress(0); total = len(df_new)
         for i, row in df_new.iterrows():
             try:
@@ -145,15 +144,17 @@ def save_data_to_cloud(df_new):
                 prog.progress((i + 1) / total)
             except: pass
         prog.empty()
+        
+        # 3. PAUSE DE SÉCURITÉ (IMPORTANT)
+        time.sleep(2) 
     
+    # 4. FORÇAGE MÉMOIRE LOCALE
     st.session_state['latest_course_context'] = {'Date': d_val, 'Heure': h_val, 'Cours': c_val}
-    st.toast("C'est enregistré !", icon="💾")
-    load_airtable_data.clear()
+    load_airtable_data.clear() # Vide le cache pour forcer la mise à jour
+    st.toast("Sauvegarde réussie !", icon="💾")
 
-# --- FONCTION PDF CORRIGÉE (25/25) ---
 def parse_pdf_complete(file_bytes):
     rows = []
-    # LISTE PROPRE : J'ai enlevé "le " et " à " pour ne pas supprimer les prénoms
     ign = ["TCPDF", "www.", "places", "réservées", "disponibles", "ouvertes", "Page ", "Généré", "Mairie", "L'Aquacienne"]
     
     current_date = date.today()
@@ -166,7 +167,6 @@ def parse_pdf_complete(file_bytes):
             if not txt: continue
             lines = txt.splitlines()
             
-            # 1. EN-TÊTE
             for l in lines[:15]:
                 m = re.search(r"\d{2}/\d{2}/\d{4}", l)
                 if m:
@@ -180,21 +180,17 @@ def parse_pdf_complete(file_bytes):
                     if len(possible_cours) > 3:
                         current_cours = possible_cours.replace("Le", "").replace("lundi", "").strip()
 
-            # 2. DÉTECTION LISTE
             start_index = 0
             for i, l in enumerate(lines):
                 if "N° réservation" in l or "Prénom" in l: 
                     start_index = i + 1
                     break
             
-            if start_index == 0 and page_index > 0:
-                start_index = 3 
+            if start_index == 0 and page_index > 0: start_index = 3 
 
-            # 3. LECTURE NOMS
             for l in lines[start_index:]:
                 l_clean = l.strip()
                 if not l_clean: continue
-                
                 if any(x in l_clean for x in ign): continue
                 
                 name_candidate = re.sub(r'[0-9]+', '', l_clean).strip()
@@ -203,17 +199,13 @@ def parse_pdf_complete(file_bytes):
                 parts = name_candidate.split()
                 if len(parts) >= 2:
                     p_nom = ""; p_prenom = ""
-                    
-                    # Logique Majuscule pour le NOM
                     mots_nom = [p for p in parts if p.isupper() and len(p) > 1]
                     mots_prenom = [p for p in parts if not p.isupper() or len(p) == 1]
                     
                     if mots_nom:
-                        p_nom = " ".join(mots_nom)
-                        p_prenom = " ".join(mots_prenom)
+                        p_nom = " ".join(mots_nom); p_prenom = " ".join(mots_prenom)
                     else:
-                        p_nom = parts[-1]
-                        p_prenom = " ".join(parts[:-1])
+                        p_nom = parts[-1]; p_prenom = " ".join(parts[:-1])
                     
                     if len(p_nom) < 2: continue
                     
@@ -242,10 +234,14 @@ def show_maitre_nageur():
             st.rerun()
         return
 
-    # Bouton REPRENDRE LE DERNIER
+    # --- LOGIQUE DE RÉCUPÉRATION DU DERNIER APPEL ---
     target_course = None
+    
+    # 1. Priorité absolue : Ce qu'on vient juste de sauvegarder (mémoire vive)
     if 'latest_course_context' in st.session_state:
         target_course = st.session_state['latest_course_context']
+    
+    # 2. Sinon : Le dernier de la base Airtable
     elif not df_all.empty and "Date_dt" in df_all.columns:
         df_sorted = df_all.sort_values(["Date_dt", "Heure"], ascending=[False, False])
         df_last = df_sorted.drop_duplicates(subset=['Date', 'Heure', 'Cours']).head(1)
@@ -257,7 +253,13 @@ def show_maitre_nageur():
         d_aff = target_course['Date']
         if isinstance(d_aff, (date, datetime)): d_aff = d_aff.strftime("%d/%m/%Y")
         else: d_aff = str(d_aff)
-        btn_label = f"🔄 REPRENDRE : {target_course['Cours']} ({d_aff} à {target_course['Heure']})"
+        
+        # BOUTON ACTUALISER (Au cas où Airtable est lent)
+        if st.button("🔄 Actualiser les données", use_container_width=True):
+            load_airtable_data.clear()
+            st.rerun()
+
+        btn_label = f"📝 REPRENDRE : {target_course['Cours']} ({d_aff} à {target_course['Heure']})"
         
         if st.button(btn_label, type="primary", use_container_width=True):
             d_target_str = target_course['Date']
@@ -269,7 +271,8 @@ def show_maitre_nageur():
             mask = (df_temp["Date_Str"] == d_target_str) & (df_temp["Heure"] == target_course['Heure']) & (df_temp["Cours"] == target_course['Cours'])
             session_data = df_all[mask].copy()
             
-            if session_data.empty: st.warning("Données introuvables.")
+            if session_data.empty:
+                st.warning("⚠️ Cours introuvable ou synchronisation en cours. Cliquez sur 'Actualiser'.")
             else:
                 reconstructed = []
                 for _, r in session_data.iterrows():
@@ -291,12 +294,12 @@ def show_maitre_nageur():
             st.session_state.current_file = up.name
             st.session_state.df_appel = parse_pdf_complete(up.read())
             st.session_state["mode_retard"] = False
+            # Si on charge un nouveau PDF, on oublie le contexte précédent
             if 'latest_course_context' in st.session_state: del st.session_state['latest_course_context']
             for k in list(st.session_state.keys()):
                  if k.startswith("cb_"): del st.session_state[k]
             st.rerun()
 
-    # Liste d'appel
     if 'df_appel' in st.session_state:
         df = st.session_state.df_appel
         if not df.empty:
